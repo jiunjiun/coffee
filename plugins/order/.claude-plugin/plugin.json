@@ -1,0 +1,6 @@
+{
+  "name": "order",
+  "description": "Discuss a request, then submit it as one complete GitHub issue that a shop main session builds",
+  "author": { "name": "jiunjiun" },
+  "license": "MIT"
+}

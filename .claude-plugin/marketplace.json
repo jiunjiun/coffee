@@ -7,6 +7,11 @@
       "name": "shop",
       "source": "./plugins/shop",
       "description": "Run features through a team of Claude sessions, with one worktree and one PR per feature"
+    },
+    {
+      "name": "order",
+      "source": "./plugins/order",
+      "description": "Discuss a request, then submit it as one complete GitHub issue that a shop main session builds"
     }
   ]
 }

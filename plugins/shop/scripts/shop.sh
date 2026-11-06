@@ -1,7 +1,7 @@
 #!/bin/bash
 # Session roles and session control for the shop skill.
-# Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead <type> <slug> <goal> [brief] | helper <job> [goal]
-#        | close <session name> | note <text> | order <slug> <name> | ready <pr> | queue <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
+# Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal]
+#        | close <session name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
 # The session name is the switch: only <prefix>-main starts leads, and only a lead starts helpers.
 # hook and prompt are Claude Code hooks: SessionStart and UserPromptSubmit.
 set -u
@@ -9,7 +9,7 @@ set -u
 die() { echo "shop: $1" >&2; exit 1; }
 
 load() {
-  prefix=; name=; role=none; conf=; main_root=; scratch=
+  prefix=; name=; role=none; conf=; main_root=; scratch=; mode=
   local common
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   main_root=$(dirname "$common")
@@ -17,7 +17,8 @@ load() {
   # Main's copy: a PR must not change its own limits.
   conf=$main_root/.claude/shop.json
   [[ -f $conf ]] || return 0
-  prefix=$(jq -r .prefix "$conf")
+  # solo: only the user starts orders. shared: requesters also send orders as GitHub issues.
+  { read -r prefix; read -r mode; } < <(jq -r '.prefix, (.mode // "solo")' "$conf")
   # ponytail: Claude Code's session file. If its format changes, every session becomes plain and the script refuses.
   name=$(jq -r '.name // ""' "$HOME/.claude/sessions/${CLAUDE_PID:-none}.json" 2>/dev/null)
   case $name in
@@ -81,6 +82,72 @@ event() {  # kind, slug, text
 # can touch it.
 approved() { [[ -f $scratch/approved/$1 ]]; }
 
+# The order plugin starts the body of each order with this line. Main's own issues do not have it.
+ORDER_MARK='<!-- shop-order -->'
+
+# An issue is an order from a requester when it is open, starts with ORDER_MARK, and comes from a collaborator of the
+# repo who is not main's account. Main opens issues only after the user's go. On a public repo anyone can open an issue,
+# and the permission API says read for anyone there, so the check asks for a collaborator.
+# Returns 0 for an order, 1 for no order, and 2 when GitHub does not answer the collaborator check.
+is_order() {  # issue JSON with state, author, and body; main's login
+  local login err
+  login=$(jq -r --arg me "$2" --arg mark "$ORDER_MARK" \
+    'select(.state == "OPEN" and (.body // "" | sub("^\\s+"; "") | startswith($mark)) and (.author.login // "") != "" and .author.login != $me) | .author.login' <<<"$1")
+  [[ -n $login ]] || return 1
+  err=$(gh api "repos/{owner}/{repo}/collaborators/$login" --silent 2>&1) && return 0
+  [[ $err == *"HTTP 404"* ]] && return 1
+  return 2
+}
+
+# Dies unless the order may start. An order from the user: the user's go approved its slug. An order from a requester:
+# its issue is an order on GitHub now, and no lead works on it.
+gate() {  # slug, issue number or empty
+  local me
+  if [[ -z $2 ]]; then
+    approved "$1" || die "the user has not said go for $1. Show the order and wait."
+    return
+  fi
+  [[ $mode == shared ]] || die "--issue needs shared mode. In solo mode, only the user's go starts an order."
+  [[ $2 =~ ^[1-9][0-9]*$ ]] || die "--issue needs an issue number."
+  grep -qx "$2" "$scratch"/working/* 2>/dev/null && die "issue #$2 already has a lead."
+  me=$(gh api user --jq .login) || die "gh cannot read your GitHub account."
+  is_order "$(gh issue view "$2" --json state,author,body)" "$me" || die "issue #$2 is not an open order from a collaborator."
+}
+
+# Shared mode: prints each new order once, and each cancel of a started order. Uses main's login in $me.
+# ponytail: reads the newest 100 open issues per poll. A repo that gets more between two polls needs paging.
+issue_events() {
+  local last=0 pid=- issues issue started slug n state ok=1 orders=
+  [[ -n ${me:-} ]] || return 0
+  mkdir -p "$scratch"
+  # The newest issue that this main process has seen. A new main process, after a crash or a resume, gets each open
+  # order with no lead again: the old main can have died before it acted on one.
+  [[ -f $scratch/last-issue ]] && read -r pid last <"$scratch/last-issue"
+  [[ $pid == "${CLAUDE_PID:-}" ]] || last=0
+  started=$(cat "$scratch"/working/* 2>/dev/null | jq -sc .)
+  issues=$(gh issue list --state open --limit 100 --json number,title,state,author,body) || return 0
+  while IFS= read -r issue; do
+    is_order "$issue" "$me"
+    case $? in
+      0) orders+=$(jq -r '"ORDER #\(.number) from @\(.author.login): \(.title)"' <<<"$issue")$'\n' ;;
+      2) ok= && break ;;
+    esac
+  done < <(jq -c --argjson last "$last" --argjson started "${started:-[]}" '.[] | select(.number > $last and ([.number] | inside($started) | not))' <<<"$issues")
+  # GitHub did not answer a collaborator check: read the same issues at the next poll, so no order is lost.
+  if [[ -n $ok ]]; then
+    printf '%s' "$orders"
+    echo "${CLAUDE_PID:-} $(jq --argjson last "$last" '[.[].number, $last] | max' <<<"$issues")" >"$scratch/last-issue"
+  fi
+  # A requester cancels a started order by closing its issue. A merge closes it as completed: that one needs nothing.
+  for slug in $(ls "$scratch/working" 2>/dev/null); do
+    n=$(cat "$scratch/working/$slug")
+    state=$(gh issue view "$n" --json state,stateReason | jq -r '"\(.state) \(.stateReason // "")"')
+    [[ -z $state || $state == OPEN* ]] && continue
+    [[ $state == *COMPLETED ]] || echo "CANCELLED #$n: its issue is closed (${state#CLOSED }). Close the PR and the lead of $slug."
+    rm -f "$scratch/working/$slug"
+  done
+}
+
 # The orders that a prompt says go for, as JSON: {go: true or false, orders: [{slug, name}]}.
 # ponytail: fixed rules, not a model. They can open more orders than the prompt means: main starts only the ones it
 # means, and reports what it starts.
@@ -139,12 +206,14 @@ check_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]*$ && $1 != main && $1 != shop ]] || d
 default_branch() { git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main; }
 
 cmd_lead() {
+  local issue=
+  [[ ${1:-} == --issue ]] && { issue=${2:-}; shift 2; }
   local type=${1:-} slug=${2:-} goal=${3:-} brief=${4:-${3:-}} skill commit from
   need main
   [[ $type =~ ^(feat|fix|chore|docs|refactor|test)$ ]] || die "type must be feat, fix, chore, docs, refactor, or test."
   check_slug "$slug"
   [[ -n $goal ]] || die "a lead needs a goal."
-  approved "$slug" || die "the user has not said go for $slug. Show the order and wait."
+  gate "$slug" "$issue"
   local max running session=$prefix-$slug-lead wt=$main_root/.scratch/$slug/wt
   max=$(limit max_leads 3)
   running=$(count "^$prefix-.+-lead\$")
@@ -164,6 +233,11 @@ $brief" 'Bash(gh pr merge:*)'; then
     die "cannot start $session."
   fi
   rm -f "$scratch/approved/$slug"
+  if [[ -n $issue ]]; then
+    # One lead per issue. The guard watches the issue, so the requester can cancel the order. T close ends both.
+    mkdir -p "$scratch/working"
+    echo "$issue" >"$scratch/working/$slug"
+  fi
   event lead "$slug" "$goal"
   echo "session=$session worktree=$wt branch=$type/$slug"
 }
@@ -207,6 +281,7 @@ close_lead() {  # lead session name
   stop_session "$1"
   git worktree remove "$wt" || die "cannot remove $wt."
   rmdir "$main_root/.scratch/$slug" 2>/dev/null
+  rm -f "$scratch/working/$slug"
   event close "$slug" "$1"
   # Delete the branch only when its work is on the default branch: a merged PR, or no commit of its own.
   if [[ -n $(gh pr list --head "$branch" --state merged --json number --jq '.[].number') ]] ||
@@ -258,11 +333,14 @@ cmd_ready() {
 }
 
 cmd_queue() {
+  local issue=
+  [[ ${1:-} == --issue ]] && { issue=${2:-}; shift 2; }
   need main
   [[ -n ${1:-} ]] || die "queue needs a slug."
   check_slug "$1"
-  approved "$1" || die "the user has not said go for $1. Show the order and wait."
-  event queue "$1" "${2:-}"
+  gate "$1" "$issue"
+  # Main needs the issue number to start the lead later.
+  event queue "$1" "${issue:+#$issue }${2:-}"
 }
 
 cmd_hold() {  # resource, slug or free
@@ -361,9 +439,10 @@ cmd_status() {
 cmd_stalled() {
   need main
   local dirs now rows n kind status state pid id dir wait since told m k s st p i d w t quiet
+  rows=$(shop_rows)
+  [[ -n $rows ]] || return 0
   dirs=$(command_dirs)
   now=$(date +%s)
-  rows=$(shop_rows)
   mkdir -p "$scratch/told"
   while IFS=$'\t' read -r n kind status state pid id dir wait; do
     [[ $kind == background ]] || continue
@@ -389,10 +468,12 @@ cmd_stalled() {
     else
       echo "STALLED $n: quiet $(((now - since) / 60)) min, status $status, state $state, no command running."
     fi
-  done < <(shop_rows)
+  done <<<"$rows"
 }
 
-# Run it with run_in_background. It ends when a session needs main, which wakes main, or when no session is left.
+# Run it with run_in_background. It ends when a session needs main, which wakes main. In solo mode, it also ends when
+# no session is left. In shared mode, it also ends on an order or a cancel from a requester, and it waits with no
+# session: orders come as GitHub issues.
 cmd_guard() {
   need main
   local pidfile=$scratch/guard.pid out
@@ -403,18 +484,46 @@ cmd_guard() {
   fi
   echo $$ >"$pidfile"
   trap "rm -f $(printf %q "$pidfile")" EXIT  # expanded now: a local is gone when the script exits
-  # The sleep comes first: a session just started is not in the list yet. Main gone: no one is left to wake.
-  while sleep "$GUARD_POLL" && ps -p "${CLAUDE_PID:-1}" >/dev/null; do
-    [[ $(count "^$prefix-(?!main\$)") -gt 0 ]] || { echo "no shop session left"; return; }
+  while :; do
+    if [[ $mode == shared ]]; then
+      [[ -n ${me:-} ]] || me=$(gh api user --jq .login 2>/dev/null)
+      out=$(issue_events)
+      [[ -z $out ]] || { echo "$out"; return; }
+    fi
+    # The sleep comes before the session checks: a session just started is not in the list yet. Main gone: no one is
+    # left to wake.
+    sleep "$GUARD_POLL" && ps -p "${CLAUDE_PID:-1}" >/dev/null || return
+    [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]] || { echo "no shop session left"; return; }
     out=$(cmd_stalled)
     [[ -z $out ]] || { echo "$out"; return; }
   done
 }
 
 cmd_hook() {
+  local text watch=leads
   cat >/dev/null
   [[ $role == main ]] || exit 0
-  jq -n --arg n "$name" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: "Shop role: main. This session is \($n). Load the shop skill before you act on a request that changes code."}}'
+  text="Shop role: main. This session is $name. Load the shop skill before you act on a request that changes code."
+  # SessionStart runs on start, resume, and compact. A resume starts a new process, and the old guard ends with the old
+  # one. So remind main whenever the guard has work: the same test as in cmd_guard.
+  [[ $mode == shared ]] && watch+=", and GitHub issues for orders from requesters"
+  [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]] &&
+    text+=" Run the guard now with run_in_background (shop.sh guard, the T of the shop skill): it watches the $watch. It says so when one already runs."
+  jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $t}}'
+}
+
+# The issue of an order, for main and a lead: the body, and only the comments of its author and of main's account. On a
+# public repo anyone can comment, and a comment from someone else must not reach a lead as a part of the order.
+cmd_issue() {
+  local me json
+  [[ $role == main || $role == lead ]] || die "issue needs a main or lead session."
+  [[ ${1:-} =~ ^[1-9][0-9]*$ ]] || die "issue needs an issue number."
+  me=$(gh api user --jq .login) || die "gh cannot read your GitHub account."
+  json=$(gh issue view "$1" --json number,title,state,author,body,comments) || die "gh cannot read issue #$1."
+  jq -r --arg me "$me" <<<"$json" '
+    .author.login as $a
+    | "#\(.number) \(.title) (\(.state), by @\($a))\n\n\(.body)",
+      (.comments[] | select(.author.login == $a or .author.login == $me) | "\n--- comment by @\(.author.login)\n\n\(.body)")'
 }
 
 # UserPromptSubmit sees only what the user typed, so a session cannot name itself main or say go by accident.
@@ -463,7 +572,7 @@ load
 cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case $cmd in
-  role) echo "role=$role name=${name:-unnamed} prefix=${prefix:-none} remote_control=${CLAUDE_CODE_BRIDGE_SESSION_ID:+on}" ;;
+  role) echo "role=$role name=${name:-unnamed} prefix=${prefix:-none} mode=${mode:-none} remote_control=${CLAUDE_CODE_BRIDGE_SESSION_ID:+on}" ;;
   hook) cmd_hook ;;
   prompt) cmd_prompt "$input" ;;
   status) cmd_status ;;
@@ -471,6 +580,7 @@ case $cmd in
   guard) cmd_guard ;;
   watch | web) cmd_watch ;;
   note) cmd_note "$@" ;;
+  issue) cmd_issue "$@" ;;
   order) cmd_order "$@" ;;
   ready) cmd_ready "$@" ;;
   queue) cmd_queue "$@" ;;
@@ -480,5 +590,5 @@ case $cmd in
   lead) cmd_lead "$@" ;;
   helper) cmd_helper "$@" ;;
   close) cmd_close "$@" ;;
-  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead <type> <slug> <goal> [brief] | helper <job> [goal] | close <name> | note <text> | order <slug> <name> | ready <pr> | queue <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
+  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close <name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
 esac

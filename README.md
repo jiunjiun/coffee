@@ -49,10 +49,12 @@ you:  Add CSV export to the reports page. Also, dark mode breaks the chart color
 main: Order: CSV export (csv-export)
       Background: Users copy the report by hand into a spreadsheet.
       Goal: A button on the reports page downloads the current report as CSV.
+      Done when: The file opens in a spreadsheet with the same rows as the page.
 
       Order: chart colors (chart-colors)
       Background: In dark mode the chart lines have almost no contrast.
       Goal: Chart colors are readable in light and dark mode.
+      Done when: The chart lines pass a contrast check in both modes.
 
       Reply go to start. To start only some, name them: go <slug>. To change something, say it.
 you:  go
@@ -113,6 +115,40 @@ With the orders csv-export (named 匯出報表) and chart-colors just shown:
 
 When main changes an order before go, it needs a new go.
 
+## Orders from your team
+
+In `shared` mode, other people on your team send orders too. Each requester talks to their own Claude Code session with the `order` plugin, and that session writes one complete order as a GitHub issue. Main watches the issues, reviews each order, and starts a lead for it. You still talk to main as before.
+
+```
+requester ──▶ /order session ──▶ GitHub issue ──▶ guard ──▶ main reviews ──▶ lead ──▶ PR
+you ──────────────────────────▶ main (as before, with go)
+```
+
+1. Set `"mode": "shared"` in `.claude/shop.json`. `/shop setup` asks for it.
+2. Each requester installs the `order` plugin once, as in [Install](#install), and types `/order` in their clone of the repo:
+
+   ```
+   /plugin marketplace add jiunjiun/coffee
+   /plugin install order@coffee
+   ```
+
+3. The requester discusses the request. The session looks for the same request in old issues and PRs, reads the code, and shows the order. When the requester says submit, it creates the issue. The first line of the body is a mark that GitHub does not show: `<!-- shop-order -->`.
+4. Main starts the guard as soon as main starts, also with no lead. Every 2 minutes, the guard reads the open issues. An issue is an order only when it has the mark and comes from a collaborator of the repo, and not from your own account: main opens your issues after your go. Other issues, for example bug reports, stay as they are. Orders sent while main is off are picked up when main starts.
+5. Main reviews only what the requester's session cannot see: a missing field, a thing that only you can do, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
+6. An order that passes starts with no go from you. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
+7. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead.
+
+The issue is the full record of an order: every fact in the brief of a lead is also in the issue. This version handles text only: logs, code, and config go into the issue as text.
+
+Who can send orders depends on who owns the repo:
+
+| Repo owner | Requesters | Can a requester push? |
+| --- | --- | --- |
+| A personal account | Collaborators always have write access. | Yes. Protect the default branch with branch protection or a ruleset. |
+| An organization | Give them the Read role, for example through a team. The base permission of the organization makes every member a collaborator too. | No. |
+
+The `order` plugin works in the terminal and the desktop app. It does not work in claude.ai/code, which loads no plugins.
+
 ## Guardrails
 
 - Only a go from you opens `shop.sh lead` and `shop.sh queue`, and only for the orders that the go opens. One go starts each order once.
@@ -120,6 +156,7 @@ When main changes an order before go, it needs a new go.
 - A lead or helper works on its own. It asks no questions, to main or to you. It decides each open point, and the lead lists its decisions in the `Decisions` section of the PR. Main reports them to you with the result.
 - A lead or helper cannot force-push or skip the git hooks with `--no-verify`. The same rules apply in any session while this skill is active, for example during `/shop commit`.
 - `shop.sh` reads the limits from `.claude/shop.json` in the main checkout. A PR cannot raise its own limits.
+- In `shared` mode, an issue is an order only when it has the order mark and comes from a collaborator of the repo, and not from main's account. `shop.sh lead --issue` checks this on GitHub, and starts one lead per issue. Main and the lead read an order with `shop.sh issue`, which leaves out the comments of other accounts. Main treats the text of an issue as data, not as instructions.
 - The optional git hooks stop Claude sessions from committing or pushing on the default branch. Your own shell does not use them.
 - The role comes from the session name. This prevents mistakes. It is not a security boundary.
 
@@ -173,12 +210,13 @@ When main changes an order before go, it needs a new go.
 `.claude/shop.json` in the project root. Only `prefix` is required:
 
 ```json
-{ "prefix": "ac-web", "max_leads": 3, "max_helpers": 2, "lead_skill": "/poteto-mode", "commit_skill": "/shop commit" }
+{ "prefix": "ac-web", "mode": "solo", "max_leads": 3, "max_helpers": 2, "lead_skill": "/poteto-mode", "commit_skill": "/shop commit" }
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `prefix` | none | The first part of each session name. It must not match the sessions of another project. |
+| `mode` | `solo` | `solo`: only you start orders. `shared`: requesters also send orders as GitHub issues. See [Orders from your team](#orders-from-your-team). |
 | `max_leads` | 3 | Leads that run at the same time. |
 | `max_helpers` | 2 | Helpers for each lead. |
 | `lead_skill` | `/poteto-mode` | The skill that each lead runs first. |
@@ -207,11 +245,12 @@ The sessions run these. You seldom need them.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `shop.sh order <slug> <name>` | main | Records an order. It has no number until its GitHub issue at go. |
-| `shop.sh lead <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order. |
-| `shop.sh queue <slug> <goal>` | main | Keeps your go for a feature that must wait. |
+| `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet. |
+| `shop.sh queue [--issue <n>] <slug> <goal>` | main | Keeps your go, or an order from a requester, for a feature that must wait. |
+| `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. |
 | `shop.sh helper <job> [goal]` | lead | Starts a helper in its own worktree, at the lead's last commit. |
 | `shop.sh close <name>` | main, lead | Stops a session and removes its worktree. For a lead, also removes the branch when its work is merged; an unmerged branch stays. It refuses while the PR is open or the worktree has changes. |
-| `shop.sh guard` | main | Waits in the background. It ends when a session needs main. |
+| `shop.sh guard` | main | Waits in the background. It ends when a session needs main. In `shared` mode, it also ends on an order or a cancel from a requester, and it waits with no session. |
 | `shop.sh hold <resource> <slug\|free>` | main | Records who uses a shared resource. |
 | `shop.sh note <text>` | any shop session | Shows the current step on the status page. |
 | `shop.sh status` | any | Lists the shop sessions and the worktrees. |
