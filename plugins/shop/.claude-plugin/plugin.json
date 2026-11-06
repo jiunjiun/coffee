@@ -1,0 +1,6 @@
+{
+  "name": "shop",
+  "description": "Run features through a team of Claude sessions, with one worktree and one PR per feature",
+  "author": { "name": "jiunjiun" },
+  "license": "MIT"
+}

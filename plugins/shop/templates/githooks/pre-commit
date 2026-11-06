@@ -1,0 +1,10 @@
+#!/bin/sh
+# Only Claude sessions run this: .claude/settings.json points them at this folder, and the owner's shell uses no hooks.
+# The default branch comes from origin/HEAD. With no origin/HEAD, it is main.
+default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+default=${default#origin/}
+default=${default:-main}
+if [ "$(git branch --show-current)" = "$default" ]; then
+  echo "A Claude session does not commit on $default. Work on a branch in your own git worktree." >&2
+  exit 1
+fi

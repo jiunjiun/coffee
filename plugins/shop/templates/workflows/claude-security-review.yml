@@ -1,0 +1,52 @@
+name: Claude Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  security-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      # gh pr view does not show inline comments, so a reviewer cannot see its earlier findings without this file.
+      - name: Save earlier inline comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" --jq '.[] | "\(.path):\(.line // .original_line) \(.body)"' > earlier-comments.txt
+      - id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The lead and the status page count open review threads, so a finding must not wait in the buffer.
+          classify_inline_comments: "false"
+          prompt: |
+            Do a security review of pull request #${{ github.event.pull_request.number }} in this repository.
+            Run `gh pr diff ${{ github.event.pull_request.number }}` to read the changes. Read the surrounding code when you need it.
+
+            Report only concrete, exploitable problems that this pull request adds. Look for private data that leaves the system or that is stored or exported without protection, a network request to a new host, secrets in code, and unsafe handling of files, URLs, or database input.
+            Do not report style, code quality, or theoretical problems. If you are not sure that a problem is real, do not report it.
+            The file earlier-comments.txt lists the inline comments on this pull request. Do not post a finding that it already states.
+
+            Post each finding as one inline comment on its line. Say how an attacker uses the problem. Post nothing when there are no findings.
+          # The official security review action needs an API key. This setup uses only the OAuth token.
+          claude_args: >-
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*)"
+      # The action succeeds without a review when it skips a PR that changes this file. The conclusion output is then empty.
+      - name: Fail when no review ran
+        if: steps.claude.outputs.conclusion == ''
+        run: |
+          echo "::error::Claude security review did not run. The action skips a PR that changes this workflow file. Read the action log, then review this PR by hand."
+          exit 1

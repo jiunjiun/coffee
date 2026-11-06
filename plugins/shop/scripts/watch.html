@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop status</title>
+<style>
+/* An app shell with three pages: overview, one feature, and activity. Every project uses this page, so it stays neutral. */
+:root {
+  --bg: #f5f6f8; --panel: #fff; --side: #eceef2; --ink: #171b21; --dim: #5b6572; --line: #dfe2e8; --track: #e4e7ec;
+  --run: #2257c5; --run-soft: #e4ecfb; --good: #15784a; --good-soft: #dff3e8; --warn: #8c5900; --warn-soft: #fbf0db; --bad: #bd2d20; --bad-soft: #fbe7e4; --mute-soft: #eceef2;
+  --sans: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121519; --panel: #1a1e24; --side: #171a1f; --ink: #e9ecf0; --dim: #98a2ae; --line: #2c3239; --track: #2b3138;
+    --run: #82aef7; --run-soft: #1f2e47; --good: #60cf96; --good-soft: #17362a; --warn: #e9b860; --warn-soft: #362b18; --bad: #f4877c; --bad-soft: #3b2323; --mute-soft: #262b32; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+a { color: var(--run); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--run); outline-offset: 2px; border-radius: 4px; }
+h1, h2, p, dl, dd, ol, ul { margin: 0; padding: 0; }
+ol, ul { list-style: none; }
+.mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.dim { color: var(--dim); }
+.num { font-variant-numeric: tabular-nums; }
+
+.top { position: sticky; top: 0; z-index: 2; background: var(--side); border-bottom: 1px solid var(--line); }
+.top-in { max-width: 1400px; margin: 0 auto; padding: 8px 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; }
+.brand { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; color: var(--ink); }
+.brand:hover { text-decoration: none; opacity: .75; }
+.nav { display: flex; gap: 2px; }
+.nav a { padding: 5px 12px; border-radius: 7px; color: var(--ink); font-weight: 500; }
+.nav a:hover { background: var(--line); text-decoration: none; }
+.nav a.on { background: var(--panel); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.top-info { margin-left: auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; font-size: 13px; }
+.top-info > span { display: inline-flex; gap: 6px; align-items: baseline; }
+.fresh { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.fresh.off { color: var(--bad); font-weight: 600; }
+
+.main { margin: 0 auto; padding: 20px 28px 56px; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; max-width: 1400px; width: 100%; }
+.head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.head h1 { font-size: 20px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; min-width: 0; }
+.back { font-size: 13px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.card > h2, .card-head { padding: 12px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--line); }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; display: grid; gap: 2px; min-width: 0; }
+.kpi dt { font-size: 13px; color: var(--dim); }
+.kpi dd { font-size: 24px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kpi.bad dd { color: var(--bad); }
+
+.alerts { display: grid; gap: 8px; }
+.alert { display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: baseline; padding: 10px 14px; border-radius: 8px; background: var(--warn-soft); }
+.alert b { color: var(--warn); font-weight: 600; overflow-wrap: anywhere; }
+.alert.act { background: var(--bad-soft); }
+.alert.act b { color: var(--bad); }
+
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+@media (max-width: 1380px) { .columns { grid-template-columns: minmax(0, 1fr); } }
+
+.bar-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; }
+.tabs button { font: inherit; font-size: 13px; color: var(--dim); background: none; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.tabs button:hover { background: var(--mute-soft); }
+.tabs button[aria-pressed="true"] { background: var(--mute-soft); color: var(--ink); font-weight: 600; }
+.search { font: inherit; font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; width: 200px; max-width: 100%; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--dim); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; min-width: 0; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr.go-row { cursor: pointer; }
+tbody tr.go-row:hover { background: var(--bg); }
+.goal { font-weight: 600; overflow-wrap: anywhere; color: var(--ink); }
+.c-lead, .c-pr, .c-time { white-space: nowrap; }
+.c-goal { min-width: 180px; }
+.empty { padding: 28px 16px; text-align: center; color: var(--dim); }
+.empty b { display: block; color: var(--ink); font-size: 15px; }
+
+.badge { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1.5; padding: 1px 8px; border-radius: 999px; white-space: nowrap; background: var(--mute-soft); color: var(--dim); }
+.badge.run { background: var(--run-soft); color: var(--run); }
+.badge.good { background: var(--good-soft); color: var(--good); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+.mini { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; width: 104px; }
+.mini i { height: 5px; border-radius: 2px; background: var(--track); }
+.mini i.done, .mini i.none { background: var(--good); }
+.mini i.none { opacity: .45; }
+.mini i.now { background: var(--run); }
+.mini i.bad { background: var(--bad); }
+.at { font-size: 12px; color: var(--dim); margin-top: 3px; white-space: nowrap; }
+
+.log { display: grid; }
+.log li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; padding: 7px 16px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.log li:last-child { border-bottom: 0; }
+.log a.row { color: var(--ink); }
+.log time { color: var(--dim); font-variant-numeric: tabular-nums; }
+.log .day { display: block; padding: 8px 16px 4px; font-size: 12px; font-weight: 600; color: var(--dim); border-bottom: 1px solid var(--line); }
+.more { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--dim); }
+.more button { font: inherit; font-size: 13px; color: var(--run); background: none; border: 0; cursor: pointer; padding: 2px 4px; }
+
+.meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 24px; padding: 14px 16px; }
+.meta dt { font-size: 12px; color: var(--dim); }
+.meta dd { overflow-wrap: anywhere; }
+.now-line { padding: 12px 16px; font-size: 15px; font-weight: 500; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+
+.flow { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); padding: 16px 12px 14px; }
+.flow li { position: relative; display: grid; justify-items: center; gap: 2px; text-align: center; padding: 0 4px; }
+.flow li::before { content: ""; position: absolute; top: 10px; left: -50%; width: 100%; height: 2px; background: var(--track); }
+.flow li:first-child::before { display: none; }
+.flow li.done::before, .flow li.none::before, .flow li.now::before, .flow li.bad::before { background: var(--good); }
+.dot { position: relative; z-index: 1; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--panel); border: 2px solid var(--track); color: var(--dim); }
+.done .dot { background: var(--good); border-color: var(--good); color: var(--panel); }
+.none .dot { background: var(--panel); border-color: var(--good); color: var(--good); }
+.now .dot { border-color: var(--run); color: var(--run); }
+.bad .dot { background: var(--bad); border-color: var(--bad); color: var(--panel); }
+.flow b { font-size: 13px; font-weight: 600; }
+.flow .todo b { color: var(--dim); font-weight: 500; }
+.flow small { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.people li { display: grid; gap: 1px; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+.people li:last-child { border-bottom: 0; }
+.people .top { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+
+@media (max-width: 820px) {
+  .top { position: static; }
+  .top-in { padding: 8px 16px; }
+  .top-info { margin-left: 0; width: 100%; }
+  .main { padding: 16px 16px 40px; }
+  .table thead { display: none; }
+  .table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px; border-bottom: 1px solid var(--line); }
+  .table tbody tr:last-child { border-bottom: 0; }
+  .table td { display: block; padding: 0; border: 0; white-space: normal; }
+  .table td:empty, .table td.no-pr { display: none; }
+  .table td.c-goal { grid-column: 1; grid-row: 1; }
+  .table td.c-status { grid-column: 2; grid-row: 1; }
+  .table td.c-lead, .table td.c-step { grid-column: 1 / -1; }
+  .table td.c-pr, .table td.c-help, .table td.c-time { display: inline-block; }
+  .table td.c-pr { grid-column: 1; }
+  .table td.c-help, .table td.c-time { display: none; }
+  .flow { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 12px 16px; }
+  .flow li { grid-template-columns: 22px minmax(0, 1fr) auto; justify-items: start; text-align: left; gap: 10px; align-items: center; padding: 6px 0; }
+  .flow li::before { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" id="project" href="#/">Shop</a>
+    <nav class="nav" aria-label="Pages">
+      <a href="#/" id="n-home">Overview</a>
+      <a href="#/activity" id="n-activity">Activity</a>
+    </nav>
+    <div class="top-info">
+      <span id="main-who"></span>
+      <span id="others-box" hidden></span>
+      <span class="fresh" id="fresh" role="status">Loading…</span>
+    </div>
+  </div>
+</header>
+<main class="main" id="view"></main>
+<script>
+const $ = id => document.getElementById(id);
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+const SHOWN = 20;
+const WORDS = { busy: 'running', running: 'running', working: 'running', idle: 'idle', done: 'idle', waiting: 'stuck', blocked: 'stuck', gone: 'gone', unknown: 'unknown' };
+const clock = t => new Date(t * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+const day = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+const when = t => t ? `${day(t)} ${clock(t)}` : '';
+function ago(now, t) {
+  if (!t) return '';
+  const m = Math.max(0, Math.floor((now - t) / 60));
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  if (m < 1440) return `${Math.floor(m / 60)} h ago`;
+  return when(t);
+}
+function badge(text, tone) { return el('span', 'badge ' + (tone || ''), text); }
+function prLink(pr) { const a = el('a', '', `#${pr.number}`); a.href = pr.url; a.target = '_blank'; a.rel = 'noreferrer'; a.addEventListener('click', e => e.stopPropagation()); return a; }
+function currentStep(r) { const s = r.steps.find(x => x.state === 'now' || x.state === 'bad') || [...r.steps].reverse().find(x => x.state === 'done'); return s ? s.label : ''; }
+function mini(r) {
+  const m = el('div', 'mini'); m.setAttribute('role', 'img'); m.setAttribute('aria-label', `Now at: ${currentStep(r)}`);
+  for (const x of r.steps) m.append(el('i', x.state));
+  return m;
+}
+function say(e) {
+  const job = (e.who || '').split('-').pop();
+  return { order: `${e.slug}: order`, go: e.slug ? `${e.slug}: you said go` : 'You said go', lead: `Started ${e.slug}${e.text ? ': ' + e.text : ''}`, ready: `${e.slug} reported to main: PR ${e.text}`, helper: `${e.slug} started helper ${e.text}`, close: `Closed ${e.text}`,
+    note: `${e.slug || 'main'}${job && job !== 'lead' && job !== 'main' ? ' ' + job : ''}: ${e.text}`, hold: e.slug === 'free' ? `${e.text} is free` : `${e.text} goes to ${e.slug}`,
+    queue: `Queued ${e.slug}${e.text ? ': ' + e.text : ''}`, pr: `${e.slug} opened PR ${e.text}`, merged: `${e.slug} merged PR ${e.text}` }[e.kind] || e.text;
+}
+function sayHere(e, again) {
+  return { order: 'Order', go: 'You said go', lead: again ? 'Started again' : 'Started', ready: `Reported to main: PR ${e.text}`, helper: `Started helper ${e.text}`, close: `Closed ${e.text}`, note: e.text,
+    hold: e.slug === 'free' ? `${e.text} is free` : `Got ${e.text}` }[e.kind] || e.text;
+}
+// A row's text with each "PR #n" linked to GitHub. page: the rest of the text goes to that feature page.
+function logBody(text, page, prs) {
+  const body = el('span');
+  const add = s => {
+    if (!s) return;
+    if (!page) { body.append(s); return; }
+    const a = el('a', 'row', s); a.href = page; body.append(a);
+  };
+  let at = 0;
+  for (const m of text.matchAll(/PR #(\d+)/g)) {
+    const pr = prs.get(Number(m[1]));
+    if (!pr) continue;  // an older PR: the page has no address for it
+    add(text.slice(at, m.index));
+    const a = prLink(pr); a.textContent = m[0]; body.append(a);
+    at = m.index + m[0].length;
+  }
+  add(text.slice(at));
+  return body;
+}
+// linked: each row goes to its feature page. A helper has no page of its own: the page of its lead lists it.
+function logList(events, text, linked) {
+  const o = el('ol', 'log');
+  const pages = new Set(linked ? S.records.map(r => r.slug) : []);
+  const prs = new Map(S.records.filter(r => r.pr).map(r => [r.pr.number, r.pr]));
+  for (const e of events) {
+    const li = el('li');
+    li.append(el('time', '', e.t ? clock(e.t) : ''), logBody(text(e) || '', pages.has(e.slug) ? `#/f/${e.slug}` : '', prs));
+    o.append(li);
+  }
+  return o;
+}
+
+let S = null, tab = 'all', query = '', kind = 'all', shownAll = SHOWN, drawnRoute = '';
+
+function alertsBox(list) {
+  const box = el('section', 'alerts'); box.setAttribute('aria-label', 'Needs attention');
+  for (const a of list) { const d = el('div', 'alert ' + a.level); d.append(el('b', '', a.title), el('code', 'mono', a.hint)); box.append(d); }
+  return box;
+}
+function rows() {
+  const active = r => r.exists || !r.closedAt;
+  const queued = S.queue.map(q => ({ slug: q.slug, goal: q.goal, queued: true }));
+  const urgent = r => r.tone === 'bad' ? 0 : 1;
+  const all = [...S.records.filter(active).sort((a, b) => urgent(a) - urgent(b)), ...queued, ...S.records.filter(r => !active(r))];
+  const q = query.trim().toLowerCase();
+  return all.filter(r => (tab === 'all' || (tab === 'active' && !r.queued && active(r)) || (tab === 'queue' && r.queued) || (tab === 'done' && !r.queued && !active(r)))
+    && (!q || `${r.goal} ${r.slug}`.toLowerCase().includes(q)));
+}
+function fillTable(box) {
+  const list = rows();
+  box.replaceChildren();
+  if (!list.length) {
+    const none = el('div', 'empty');
+    if (S.records.length || S.queue.length) none.textContent = 'No feature matches.';
+    else none.append(el('b', '', 'No features yet'), el('span', '', 'Tell main what to build. After you say go, the feature shows here.'));
+    box.append(none);
+    return;
+  }
+  const t = el('table', 'table'), head = el('thead'), hr = el('tr');
+  for (const h of ['Feature', 'Lead', 'Status', 'Progress', 'PR', 'Helpers', 'Updated']) hr.append(el('th', '', h));
+  head.append(hr);
+  const body = el('tbody');
+  for (const r of list) {
+    const tr = el('tr', r.queued ? '' : 'go-row'), cell = (cls, ...kids) => { const td = el('td', cls); td.append(...kids); tr.append(td); };
+    if (r.queued) {
+      cell('c-goal', el('span', 'goal', r.goal || r.slug));
+      cell('c-lead', el('span', 'mono dim', r.slug));
+      cell('c-status', badge('Queued'));
+      cell('c-step'); cell('c-pr'); cell('c-help'); cell('c-time');
+    } else {
+      const a = el('a', 'goal', r.goal || r.slug); a.href = `#/f/${r.slug}`;
+      const step = el('div'); step.append(mini(r), el('div', 'at', currentStep(r)));
+      const pr = el('span');
+      if (r.pr) { pr.append(prLink(r.pr)); if (r.pr.state === 'OPEN') pr.append(el('span', 'dim', ` CI ${r.pr.pass}/${r.pr.pass + r.pr.wait + r.pr.fail}`)); }
+      else pr.append(el('span', 'dim', '—'));
+      cell('c-goal', a);
+      cell('c-lead', el('span', 'mono dim', r.name));
+      cell('c-status', badge(r.status, r.tone));
+      cell('c-step', step);
+      cell('c-pr' + (r.pr ? '' : ' no-pr'), pr);
+      cell('c-help num', el('span', r.helpers.length ? '' : 'dim', r.helpers.length || '—'));
+      cell('c-time dim', el('span', 'num', ago(S.now, r.updatedAt)));
+      tr.addEventListener('click', () => { location.hash = `#/f/${r.slug}`; });
+    }
+    body.append(tr);
+  }
+  t.append(head, body);
+  box.append(t);
+}
+function overview(view) {
+  const head = el('div', 'head'); head.append(el('h1', '', 'Overview')); view.append(head);
+  const acts = S.attention.filter(a => a.level === 'act').length, running = S.records.filter(r => r.exists).length;
+  const kpis = el('dl', 'kpis');
+  const tile = (label, value, cls) => { const d = el('div', 'kpi ' + (cls || '')); d.append(el('dt', '', label), el('dd', '', value)); kpis.append(d); };
+  tile('Running', `${running} / ${S.limits.leads}`);
+  tile('Needs you', acts, acts ? 'bad' : '');
+  tile('Queued', S.queue.length);
+  tile('Merged PRs', S.totals.merged);
+  tile('Helpers', S.totals.helpers);
+  for (const [resource, slug] of Object.entries(S.holds)) tile(resource, slug || 'free');
+  view.append(kpis);
+  if (S.attention.length) view.append(alertsBox(S.attention));
+  const cols = el('div', 'columns');
+  const card = el('section', 'card');
+  const bar = el('div', 'bar-row'), tabs = el('div', 'tabs');
+  const active = r => r.exists || !r.closedAt;
+  const counts = { all: S.records.length + S.queue.length, active: S.records.filter(active).length, queue: S.queue.length, done: S.records.filter(r => !active(r)).length };
+  for (const [k, label] of [['all', 'All'], ['active', 'Running'], ['queue', 'Queued'], ['done', 'Ended']]) {
+    const b = el('button', '', `${label} ${counts[k]}`); b.type = 'button'; b.setAttribute('aria-pressed', tab === k);
+    b.addEventListener('click', () => { tab = k; render(true); });
+    tabs.append(b);
+  }
+  const box = el('div');
+  const search = el('input', 'search'); search.type = 'search'; search.id = 'search'; search.placeholder = 'Search features'; search.setAttribute('aria-label', 'Search features'); search.value = query;
+  search.addEventListener('input', () => { query = search.value; fillTable(box); });
+  bar.append(tabs, search); card.append(bar, box); fillTable(box);
+  const side = el('section', 'card'); side.append(el('h2', '', 'Recent events'));
+  if (S.timeline.length) {
+    side.append(logList(S.timeline.slice(0, SHOWN), say, true));
+    if (S.timeline.length > SHOWN) { const more = el('div', 'more'); const a = el('a', '', 'All activity'); a.href = '#/activity'; more.append(el('span', '', `Last ${SHOWN}`), a); side.append(more); }
+  } else side.append(el('div', 'empty', 'No events yet.'));
+  cols.append(card, side);
+  view.append(cols);
+}
+function feature(view, slug) {
+  const r = S.records.find(x => x.slug === slug);
+  const back = el('a', 'back', '← Overview'); back.href = '#/'; view.append(back);
+  if (!r) { const c = el('div', 'card empty', 'No such feature.'); view.append(c); return; }
+  const head = el('div', 'head'); head.append(el('h1', '', r.goal || r.slug), badge(r.status, r.tone)); view.append(head);
+  const mine = S.attention.filter(a => a.title.startsWith(r.slug) || (r.pr && a.title.includes(`#${r.pr.number} `)));
+  if (mine.length) view.append(alertsBox(mine));
+  const info = el('section', 'card'), meta = el('dl', 'meta');
+  const item = (label, ...kids) => { const d = el('div'); const v = el('dd'); v.append(...kids); d.append(el('dt', '', label), v); meta.append(d); };
+  item('Lead', el('span', 'mono', r.name));
+  item('PR', r.pr ? prLink(r.pr) : el('span', 'dim', 'none yet'));
+  if (r.branch) item('Branch', el('span', 'mono', r.branch));
+  item('Started', el('span', 'num', when(r.startedAt)));
+  item(r.closedAt ? 'Ended' : 'Updated', el('span', 'num', when(r.closedAt || r.updatedAt)));
+  if (r.runs > 1) item('Restarts', el('span', '', `${r.runs - 1}`));
+  info.append(meta);
+  if (r.note && r.exists) { const n = el('div', 'now-line'); n.append(el('span', 'dim', 'Now: '), document.createTextNode(r.note)); info.append(n); }
+  view.append(info);
+  const flow = el('section', 'card'); flow.append(el('h2', '', 'Flow'));
+  const steps = el('ol', 'flow');
+  r.steps.forEach((x, i) => {
+    const li = el('li', x.state);
+    const mark = { done: '✓', none: '✓', bad: '!', now: i + 1, todo: i + 1 }[x.state];
+    li.append(el('span', 'dot', mark), el('b', '', x.label), el('small', '', x.t ? clock(x.t) : x.state === 'none' ? 'no record' : x.state === 'now' ? 'now' : x.state === 'bad' ? 'needs you' : ''));
+    steps.append(li);
+  });
+  flow.append(steps); view.append(flow);
+  const two = el('div', 'two');
+  const logs = el('section', 'card'); logs.append(el('h2', '', `Events ${r.events.length}`));
+  let starts = 0;
+  logs.append(r.events.length ? logList(r.events, e => { if (e.kind === 'lead') starts++; return sayHere(e, starts > 1); }) : el('div', 'empty', 'No events yet.'));
+  const help = el('section', 'card'); help.append(el('h2', '', `Helpers ${r.helpers.length}`));
+  if (r.helpers.length) {
+    const u = el('ul', 'people');
+    for (const h of r.helpers) {
+      const li = el('li'), top = el('div', 'top');
+      top.append(el('span', 'mono', h.name), badge(h.exists ? WORDS[h.state] || h.state : 'removed', h.exists ? (['busy', 'running', 'working'].includes(h.state) ? 'run' : '') : ''));
+      li.append(top);
+      if (h.goal) li.append(el('span', 'dim', h.goal));
+      if (h.note) li.append(el('span', '', h.note));
+      u.append(li);
+    }
+    help.append(u);
+  } else help.append(el('div', 'empty', 'This feature has no helpers.'));
+  two.append(logs, help);
+  view.append(two);
+}
+function activity(view) {
+  const head = el('div', 'head'); head.append(el('h1', '', 'Activity')); view.append(head);
+  const group = e => e.kind === 'pr' || e.kind === 'merged' ? 'pr' : e.kind === 'helper' || (e.kind === 'note' && !/-(lead|main)$/.test(e.who || '')) ? 'helper' : e.kind === 'note' && /-lead$/.test(e.who || '') || e.kind === 'ready' ? 'lead' : 'main';
+  const card = el('section', 'card'), bar = el('div', 'bar-row'), tabs = el('div', 'tabs');
+  for (const [k, label] of [['all', 'All'], ['main', 'Main'], ['lead', 'Leads'], ['helper', 'Helpers'], ['pr', 'PRs']]) {
+    const b = el('button', '', label); b.type = 'button'; b.setAttribute('aria-pressed', kind === k);
+    b.addEventListener('click', () => { kind = k; shownAll = SHOWN; render(true); });
+    tabs.append(b);
+  }
+  bar.append(tabs); card.append(bar);
+  const list = S.timeline.filter(e => kind === 'all' || group(e) === kind);
+  if (!list.length) card.append(el('div', 'empty', 'No events.'));
+  else {
+    card.append(logList(list.slice(0, shownAll), say, true));
+    if (list.length > shownAll) {
+      const more = el('div', 'more'), b = el('button', '', `Show ${SHOWN} more`); b.type = 'button';
+      b.addEventListener('click', () => { shownAll += SHOWN; render(true); });
+      more.append(el('span', '', `${shownAll} of ${list.length}`), b); card.append(more);
+    }
+  }
+  view.append(card);
+}
+function render(force) {
+  if (!S) return;
+  const route = location.hash.replace(/^#\/?/, '');
+  const typing = document.activeElement && document.activeElement.id === 'search';
+  if (typing && !force && route === drawnRoute) return;
+  drawnRoute = route;
+  $('project').textContent = S.prefix;
+  document.title = `${S.prefix} status`;
+  $('n-home').className = route === 'activity' ? '' : 'on';
+  $('n-activity').className = route === 'activity' ? 'on' : '';
+  $('main-who').replaceChildren(el('span', 'mono', S.mainName), el('span', 'dim', WORDS[S.main.state] || S.main.state));
+  $('others-box').hidden = !S.others.length;
+  $('others-box').replaceChildren(el('span', 'dim', `Other sessions ${S.others.length}`));
+  $('others-box').title = S.others.join(', ');
+  const view = $('view'), top = window.scrollY;
+  view.replaceChildren();
+  if (route.startsWith('f/')) feature(view, route.slice(2));
+  else if (route === 'activity') activity(view);
+  else overview(view);
+  window.scrollTo(0, top);
+}
+let last = '';
+async function tick() {
+  const fresh = $('fresh');
+  try {
+    const res = await fetch('/state');
+    if (!res.ok) throw new Error(res.status);
+    const s = await res.json();
+    fresh.textContent = `Updated ${new Date().toLocaleTimeString(undefined, { hour12: false })}`;
+    fresh.className = 'fresh';
+    const seen = JSON.stringify({ ...s, now: Math.floor(s.now / 60) });
+    if (seen !== last) { S = s; last = seen; render(false); }
+  } catch (e) {
+    fresh.textContent = 'The status page is offline, so the data can be old. Type /shop web to start it again.';
+    fresh.className = 'fresh off';
+  }
+  setTimeout(tick, 3000);
+}
+addEventListener('hashchange', () => { window.scrollTo(0, 0); render(true); });
+tick();
+</script>
+</body>
+</html>

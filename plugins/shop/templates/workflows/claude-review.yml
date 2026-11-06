@@ -1,0 +1,45 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      # gh pr view does not show inline comments, so a reviewer cannot see its earlier findings without this file.
+      - name: Save earlier inline comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" --jq '.[] | "\(.path):\(.line // .original_line) \(.body)"' > earlier-comments.txt
+      - id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          # The sentence goes in the system prompt: text after the slash command would be read as its arguments.
+          claude_args: >-
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+            --append-system-prompt "Review every open PR that is not a draft, also when it is small or automated. A new push needs a new review: when Claude has already commented on this PR, review it anyway, and look only at the commits after that comment. The file earlier-comments.txt lists the inline comments on this PR: do not post a finding that it already states."
+      # The action succeeds without a review when it skips a PR that changes this file. The conclusion output is then empty.
+      - name: Fail when no review ran
+        if: steps.claude.outputs.conclusion == ''
+        run: |
+          echo "::error::Claude review did not run. The action skips a PR that changes this workflow file. Read the action log, then review this PR by hand."
+          exit 1

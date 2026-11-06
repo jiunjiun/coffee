@@ -1,0 +1,12 @@
+{
+  "name": "coffee",
+  "description": "Claude Code plugins by jiunjiun",
+  "owner": { "name": "jiunjiun" },
+  "plugins": [
+    {
+      "name": "shop",
+      "source": "./plugins/shop",
+      "description": "Run features through a team of Claude sessions, with one worktree and one PR per feature"
+    }
+  ]
+}

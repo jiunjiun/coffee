@@ -1,0 +1,11 @@
+#!/bin/sh
+# Only Claude sessions run this: see pre-commit. GitHub cannot refuse the push: a private repo on the free plan has no branch protection.
+default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+default=${default#origin/}
+default=${default:-main}
+while read -r _ _ remote_ref _; do
+  if [ "$remote_ref" = "refs/heads/$default" ]; then
+    echo "A Claude session does not push to $default. Open a PR." >&2
+    exit 1
+  fi
+done
