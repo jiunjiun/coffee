@@ -9,7 +9,8 @@ Run once per project, in the project root.
 5. A lead commits and pushes with `/shop commit`. If the machine has another commit skill, for example `/commit`, ask the user which one the leads use. Set `commit_skill` only when the user picks another skill.
 6. Ask for the mode. `solo`, the default: only the user starts orders. `shared`: requesters on the team also send orders as GitHub issues with the `order` plugin, and main watches the issues. For `shared`:
    - Give the user the README section on who can send orders and how requesters install the plugin: https://github.com/jiunjiun/coffee#orders-from-your-team
-   - Check that `gh auth status` lists the `repo` and `read:org` scopes: the guard needs them to check collaborators.
+   - Check that `gh auth status` lists the `repo` and `read:org` scopes: the guard needs them to check collaborators. A push of the workflow file of step 10 also needs the `workflow` scope.
+   - Tell the user: `github-actions[bot]` merges the PRs of requesters' orders. Such a merge does not start other workflows, for example a deploy on a push to the default branch.
 7. Write `.claude/shop.json`. Keep only `prefix` and the values that differ from the defaults:
 
    ```json
@@ -30,7 +31,7 @@ Run once per project, in the project root.
    ```
 
    The hooks run only for Claude sessions, so the owner's shell does not change.
-10. Run `shop.sh ci`. It reports the two review workflows and the token. These workflows review each PR of a lead, so a project with no workflows gets no review.
+10. Run `shop.sh ci`. It reports the two review workflows and the token. These workflows review each PR of a lead, so a project with no workflows gets no review. In `shared` mode, it also reports `shop-merge.yml`, the workflow that merges the PRs of requesters' orders. It merges only when main's account runs it. Main can run it only after it is on the default branch.
    - A workflow is missing: ask the user. On a branch, run `shop.sh ci install`. Ask what this project needs its reviewers to watch, and add it to the prompts. Commit and open a PR. The reviews of that PR fail by design: the action skips a PR that changes its own workflow. Merge it after you read it.
    - The token is missing: tell the user the steps below. Never ask for the token, never read it, and never run this for the user.
 

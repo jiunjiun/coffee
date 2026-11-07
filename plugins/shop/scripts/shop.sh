@@ -1,7 +1,7 @@
 #!/bin/bash
 # Session roles and session control for the shop skill.
 # Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal]
-#        | close <session name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
+#        | close <session name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
 # The session name is the switch: only <prefix>-main starts leads, and only a lead starts helpers.
 # hook and prompt are Claude Code hooks: SessionStart and UserPromptSubmit.
 set -u
@@ -36,8 +36,10 @@ count() { agents | jq --arg re "$1" '[.[] | select((.name // "") | test($re))] |
 names() { agents | jq -r --arg re "$1" '.[] | select((.name // "") | test($re)) | .name'; }
 helpers_re() { echo "^$1-(?!lead\$)[a-z0-9]+\$"; }
 
-STALL_MIN=${STALL_MIN:-30}    # minutes with nothing happening; the tests set it
-GUARD_POLL=${GUARD_POLL:-120} # seconds
+STALL_MIN=${STALL_MIN:-30}      # minutes with nothing happening; the tests set it
+GUARD_POLL=${GUARD_POLL:-120}   # seconds
+MERGE_POLL=${MERGE_POLL:-5}     # seconds between two checks of a shop merge run
+MERGE_WAIT=${MERGE_WAIT:-540}   # seconds: under the Bash timeout of 10 minutes that SKILL.md gives merge
 
 # One tab-separated line per session of this shop. An empty value is "-": read skips an empty field.
 shop_rows() {
@@ -183,7 +185,7 @@ start() {  # session, directory, system prompt, first prompt, extra denied tools
   # flags: --disallowedTools takes every word after it. EnterWorktree asks for a permission, and no one answers in a
   # background session: the session starts in its worktree, so it needs none. No one answers AskUserQuestion either:
   # a session sends its question up. The git rules are the limits of the commit steps.
-  out=$(cd "$dir" && claude --bg ${first[@]+"${first[@]}"} -n "$session" --permission-mode auto --disallowedTools 'Bash(claude --bg:*)' EnterWorktree ExitWorktree AskUserQuestion \
+  out=$(cd "$dir" && claude --bg ${first[@]+"${first[@]}"} -n "$session" --permission-mode auto --disallowedTools 'Bash(claude --bg:*)' 'Bash(gh workflow run:*)' EnterWorktree ExitWorktree AskUserQuestion \
     'Bash(git push *--force*)' 'Bash(git push -f*)' 'Bash(git push * -f*)' 'Bash(git push *--no-verify*)' 'Bash(git commit *--no-verify*)' \
     "$@" --append-system-prompt "$prompt" 2>&1 </dev/null)
   [[ $out == *backgrounded* ]] && return 0
@@ -332,6 +334,53 @@ cmd_ready() {
   event ready "$(own_slug)" "#$1"
 }
 
+# Main merges each PR. When the PR closes an issue that another account opened, the order of a requester, the shop
+# merge workflow merges it, so that github-actions[bot] merges it, not main's account. Solo mode has no such order.
+cmd_merge() {  # PR number, the head commit that main checked
+  local pr=${1:-} sha=${2:-} issues issue author='' me='' before run deadline
+  need main
+  [[ $pr =~ ^[1-9][0-9]*$ && $sha =~ ^[0-9a-f]{40}$ ]] || die "merge needs a PR number and its full head commit."
+  if [[ $mode == shared ]]; then
+    # Each issue of this repo that the PR closes. An issue of another repo can have the same number: skip it.
+    issues=$(gh pr view "$pr" --json url,closingIssuesReferences --jq '(.url | sub("/pull/[0-9]+$"; "/issues/")) as $here |
+      .closingIssuesReferences[] | select(.url | startswith($here)) | .number') || die "gh cannot read PR #$pr."
+    if [[ -n $issues ]]; then
+      me=$(gh api user --jq .login) || die "gh cannot read your GitHub account."
+    fi
+    for issue in $issues; do
+      author=$(gh issue view "$issue" --json author --jq .author.login) || die "gh cannot read issue #$issue."
+      [[ $author == "$me" ]] || break
+    done
+  fi
+  if [[ $author == "$me" ]]; then
+    gh pr merge "$pr" --squash --match-head-commit "$sha" || die "gh pr merge failed for PR #$pr."
+    echo "merged PR #$pr under main's account"
+    return
+  fi
+  before=$(gh run list --workflow shop-merge.yml --limit 20 --json databaseId --jq '[.[].databaseId]') ||
+    die "gh cannot find the shop merge workflow. Run shop.sh ci install, then merge its PR: GitHub finds a workflow only on the default branch."
+  gh workflow run shop-merge.yml -f pr="$pr" -f sha="$sha" >/dev/null || die "gh cannot run the shop merge workflow."
+  # A clock, not a count of checks: each check also waits for gh.
+  deadline=$((SECONDS + MERGE_WAIT))
+  while ((SECONDS < deadline)); do
+    sleep "$MERGE_POLL"
+    # The workflow names each run after its PR. A run of an earlier merge call is in $before: only a new run counts.
+    run=$(gh run list --workflow shop-merge.yml --limit 20 --json databaseId,displayTitle,status,conclusion,url |
+      jq -r --argjson before "$before" --arg title "Shop merge PR $pr" \
+        'first(.[] | select(.displayTitle == $title and .status == "completed" and (.databaseId | IN($before[]) | not))) | "\(.conclusion) \(.url)"')
+    case $run in
+      "") ;;
+      success*) echo "merged PR #$pr with github-actions[bot]: it is the order of @$author"; return ;;
+      *)
+        # The run of an earlier merge call can have merged the PR, so this run failed: the PR is merged.
+        [[ $(gh pr view "$pr" --json state --jq .state) == MERGED ]] &&
+          { echo "PR #$pr is merged, but its last shop merge run failed: ${run#* }. Make sure that its issue is closed."; return; }
+        die "the shop merge workflow failed: ${run#* }. Read why: gh run view --log-failed ${run##*/}" ;;
+    esac
+  done
+  die "PR #$pr is not merged yet. Its shop merge run can still wait for a runner: gh run list --workflow shop-merge.yml"
+}
+
 cmd_queue() {
   local issue=
   [[ ${1:-} == --issue ]] && { issue=${2:-}; shift 2; }
@@ -376,16 +425,21 @@ cmd_watch() {
 }
 
 cmd_ci() {
-  local top name dir templates
+  local top name dir templates list="claude-review.yml claude-security-review.yml" me=
   top=$(git rev-parse --show-toplevel 2>/dev/null) || die "this folder is not a git repo."
   dir=$top/.github/workflows
   templates=$(dirname "$0")/../templates/workflows
-  for name in claude-review.yml claude-security-review.yml; do
+  # Shared mode: main merges the PRs of requesters through shop-merge.yml, and only main's account may run it.
+  if [[ $mode == shared ]]; then
+    list+=" shop-merge.yml"
+    [[ ${1:-} == install ]] && { me=$(gh api user --jq .login) || die "gh cannot read your GitHub account."; }
+  fi
+  for name in $list; do
     if [[ -f $dir/$name ]]; then
       echo "ok      $name"
     elif [[ ${1:-} == install ]]; then
       mkdir -p "$dir"
-      cp "$templates/$name" "$dir/$name"
+      sed "s/SHOP_MAIN_LOGIN/$me/g" "$templates/$name" >"$dir/$name"
       echo "added   $name"
     else
       echo "missing $name: run shop.sh ci install"
@@ -583,6 +637,7 @@ case $cmd in
   issue) cmd_issue "$@" ;;
   order) cmd_order "$@" ;;
   ready) cmd_ready "$@" ;;
+  merge) cmd_merge "$@" ;;
   queue) cmd_queue "$@" ;;
   hold) cmd_hold "$@" ;;
   ci) cmd_ci "$@" ;;
@@ -590,5 +645,5 @@ case $cmd in
   lead) cmd_lead "$@" ;;
   helper) cmd_helper "$@" ;;
   close) cmd_close "$@" ;;
-  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close <name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
+  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close <name> | note <text> | issue <n> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
 esac

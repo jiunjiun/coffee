@@ -26,8 +26,27 @@ cat >"$tmp/bin/gh" <<STUB
   grep -qx "\${2##*/}" "$tmp/collaborators" 2>/dev/null || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
   exit
 }
-[[ \$1 == issue && \$2 == view ]] && { cat "$tmp/issue-\$3.json" 2>/dev/null || echo '{}'; exit; }
+show() { if [[ \$flag == --jq ]]; then jq -r "\$filter" "\$1"; else cat "\$1"; fi; }  # a file, filtered like gh --jq
+flag=\${*: -2:1} filter=\${*: -1}
+[[ \$1 == issue && \$2 == view ]] && { show "$tmp/issue-\$3.json" 2>/dev/null || echo '{}'; exit; }
 [[ \$1 == issue && \$2 == list ]] && { cat "$tmp/issues.json" 2>/dev/null || echo '[]'; exit; }
+[[ \$1 == pr && \$2 == view ]] && { show "$tmp/pr-\$3.json"; exit; }
+[[ \$1 == pr && \$2 == merge ]] && { echo "\$*" >>"$tmp/merge.log"; exit; }
+[[ \$1 == run && \$2 == list ]] && {
+  [[ -f $tmp/no-workflow ]] && { echo "could not find any workflows named shop-merge.yml" >&2; exit 1; }
+  show "$tmp/runs.json"
+  exit
+}
+[[ \$1 == workflow && \$2 == run ]] && {  # workflow-does: fail, wait, or nothing for a run that merges
+  echo "\$*" >>"$tmp/workflow.log"
+  n=\${5#pr=}
+  case \$(cat "$tmp/workflow-does" 2>/dev/null) in
+    fail) echo "[{\"databaseId\":2\$n,\"displayTitle\":\"Shop merge PR \$n\",\"status\":\"completed\",\"conclusion\":\"failure\",\"url\":\"https://github.com/o/r/actions/runs/2\$n\"}]" >"$tmp/runs.json" ;;
+    wait) ;;
+    *) echo "[{\"databaseId\":3\$n,\"displayTitle\":\"Shop merge PR \$n\",\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"https://github.com/o/r/actions/runs/3\$n\"}]" >"$tmp/runs.json" ;;
+  esac
+  exit
+}
 [[ \$1 == api ]] && { echo '{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"reviewThreads":{"nodes":[{"isResolved":false},{"isResolved":true}]}}]}}}}'; exit; }
 [[ \$* == *--limit* ]] && { cat "$tmp/prs.json" 2>/dev/null || echo '[]'; exit; }
 [[ \$* == *"--state merged"* ]] && { cat "$tmp/merged-pr" 2>/dev/null; exit; }
@@ -38,9 +57,10 @@ cat >"$tmp/bin/open" <<STUB
 echo "\$1" >>"$tmp/opened.log"
 STUB
 chmod +x "$tmp/bin/claude" "$tmp/bin/gh" "$tmp/bin/open"
-export PATH="$tmp/bin:$PATH" HOME="$tmp" CLAUDE_PID=1
+export PATH="$tmp/bin:$PATH" HOME="$tmp" CLAUDE_PID=1 MERGE_POLL=0 MERGE_WAIT=5
 unset CLAUDE_CODE_BRIDGE_SESSION_ID
 echo '[]' >"$tmp/agents.json"
+echo '[]' >"$tmp/runs.json"
 git init -q --bare -b main "$tmp/origin.git"
 git init -q -b main "$tmp/repo"
 cd "$tmp/repo" || exit 1
@@ -459,7 +479,34 @@ echo 16 >.scratch/shop/working/issue-csv
 want "closed ac-web-issue-csv-lead" "main closes the lead of an order" "$(run close ac-web-issue-csv-lead)"
 [[ ! -e .scratch/shop/working/issue-csv ]] || { echo "FAIL close ends the watch of its issue"; failed=1; }
 want "session=ac-web-issue-csv-lead" "an order starts again after close" "$(run lead --issue 16 feat issue-csv g)"
+want "gh workflow run" "a lead cannot run the shop merge workflow" "$(cat "$tmp/spawn.log")"
+sha=0123456789abcdef0123456789abcdef01234567
+as ac-web-issue-csv-lead; want "needs a main session" "a lead cannot merge" "$(run merge 5 $sha)"; as ac-web-main
+want "full head commit" "merge needs the full head commit" "$(run merge 5 0123456)"
+echo '{"url":"https://github.com/o/r/pull/5","closingIssuesReferences":[{"number":11,"url":"https://github.com/o/r/issues/11"}]}' >"$tmp/pr-5.json"  # issue 11 is from main's account
+want "under main's account" "main merges the PR of its own order" "$(run merge 5 $sha)"
+want "pr merge 5 --squash --match-head-commit $sha" "main merges the commit that it checked" "$(cat "$tmp/merge.log")"
+echo '{"url":"https://github.com/o/r/pull/7","closingIssuesReferences":[]}' >"$tmp/pr-7.json"
+want "under main's account" "main merges a PR that closes no issue" "$(run merge 7 $sha)"
+echo '{"url":"https://github.com/o/r/pull/8","closingIssuesReferences":[{"number":16,"url":"https://github.com/x/y/issues/16"}]}' >"$tmp/pr-8.json"
+want "under main's account" "an issue of another repo with the same number is not an order" "$(run merge 8 $sha)"
+echo '{"url":"https://github.com/o/r/pull/6","closingIssuesReferences":[{"number":11,"url":"https://github.com/o/r/issues/11"},{"number":16,"url":"https://github.com/o/r/issues/16"}]}' >"$tmp/pr-6.json"  # issue 16 is from amy
+touch "$tmp/no-workflow"
+want "ci install" "the order of a requester needs the shop merge workflow" "$(run merge 6 $sha)"
+rm "$tmp/no-workflow"
+echo fail >"$tmp/workflow-does"
+want "workflow failed: https://github.com/o/r/actions/runs/26" "merge reports a failed run" "$(run merge 6 $sha)"
+echo wait >"$tmp/workflow-does"
+want "not merged yet" "merge stops waiting, and an old failed run does not count" "$(MERGE_WAIT=1 run merge 6 $sha)"
+echo fail >"$tmp/workflow-does"
+jq '.state = "MERGED"' "$tmp/pr-6.json" >"$tmp/pr-9.json"
+want "PR #9 is merged, but" "a failed run of a merged PR is no failure" "$(run merge 9 $sha)"
+rm "$tmp/workflow-does"
+want "with github-actions[bot]: it is the order of @amy" "the workflow merges a PR that also closes an order of a requester" "$(run merge 6 $sha)"
+want "workflow run shop-merge.yml -f pr=6 -f sha=$sha" "the workflow gets the commit that main checked" "$(cat "$tmp/workflow.log")"
+[[ $(cat "$tmp/merge.log") != *"merge 6"* ]] || { echo "FAIL main's account does not merge the order of a requester"; failed=1; }
 echo '{"prefix":"ac-web"}' >.claude/shop.json
+want "under main's account" "in solo mode, main merges each PR" "$(run merge 6 $sha)"
 agents_are '[]'
 [[ $(echo '{}' | "$shop" hook) != *"Run the guard"* ]] || { echo "FAIL a solo main with no lead gets no guard reminder"; failed=1; }
 agents_are "[$(bg ac-web-a-lead)]"
@@ -478,6 +525,13 @@ run ci install >/dev/null
 echo CLAUDE_CODE_OAUTH_TOKEN >"$tmp/secrets"
 want "ok      CLAUDE_CODE_OAUTH_TOKEN" "ci sees the token" "$(run ci)"
 want "normal terminal" "token refuses to run through Claude" "$(run token </dev/null)"
+[[ $(run ci) != *shop-merge* ]] || { echo "FAIL solo mode needs no shop merge workflow"; failed=1; }
+echo '{"prefix":"ac-web","mode":"shared"}' >.claude/shop.json
+want "missing shop-merge.yml" "ci finds no shop merge workflow in shared mode" "$(run ci)"
+want "added   shop-merge.yml" "ci install adds the shop merge workflow" "$(run ci install)"
+want '[ "$ACTOR" = "owner" ]' "only main's account runs the shop merge workflow" "$(cat .github/workflows/shop-merge.yml)"
+want "gh issue close" "the shop merge workflow closes the issue: GitHub does not close it for a bot merge" "$(cat .github/workflows/shop-merge.yml)"
+echo '{"prefix":"ac-web"}' >.claude/shop.json
 for f in "$(dirname "$shop")"/../templates/workflows/*.yml; do
   yq e . "$f" >/dev/null || { echo "FAIL bad yaml $f"; failed=1; }
 done

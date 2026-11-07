@@ -1,0 +1,42 @@
+# The shop plugin installs this file in shared mode: shop.sh ci install. Main runs it through shop.sh merge, for the PR
+# of an order from a requester, so that github-actions[bot] merges the PR, not main's account.
+name: Shop merge
+# shop.sh merge finds the run by this name.
+run-name: Shop merge PR ${{ inputs.pr }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+      sha:
+        description: The head commit that main checked
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ACTOR: ${{ github.triggering_actor }}
+          PR: ${{ inputs.pr }}
+          SHA: ${{ inputs.sha }}
+        # Each collaborator with write access can run this workflow. Only main's account merges through it.
+        run: |
+          [ "$ACTOR" = "SHOP_MAIN_LOGIN" ] || { echo "::error::Only SHOP_MAIN_LOGIN runs this workflow, not $ACTOR."; exit 1; }
+          gh pr merge "$PR" --squash --match-head-commit "$SHA"
+          # GitHub does not close the issues of a PR that github-actions[bot] merges: close them here. Only the issues
+          # of this repo: an issue of another repo can have the same number.
+          for issue in $(gh pr view "$PR" --json url,closingIssuesReferences --jq '(.url | sub("/pull/[0-9]+$"; "/issues/")) as $here | .closingIssuesReferences[] | select(.url | startswith($here)) | .number'); do
+            gh issue close "$issue" --reason completed --comment "Merged in #$PR."
+          done

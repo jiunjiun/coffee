@@ -136,9 +136,12 @@ you ─────────────────────────�
 4. Main starts the guard as soon as main starts, also with no lead. Every 2 minutes, the guard reads the open issues. An issue is an order only when it has the mark and comes from a collaborator of the repo, and not from your own account: main opens your issues after your go. Other issues, for example bug reports, stay as they are. Orders sent while main is off are picked up when main starts.
 5. Main reviews only what the requester's session cannot see: a missing field, a thing that only you can do, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
 6. An order that passes starts with no go from you. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
-7. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead.
+7. Main checks the PR as usual. Then the workflow `shop-merge.yml` merges it and closes the issue, so the PR shows `github-actions[bot]` as the account that merged it, not you. GitHub does not close the issue of a PR that a bot merges, so the workflow does it. `shop.sh ci install` adds the workflow, and only your account can run it. To find who asked for a change later, follow the commit to its PR, `Closes #<n>`, and the author of that issue.
+8. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead.
 
 The issue is the full record of an order: every fact in the brief of a lead is also in the issue. This version handles text only: logs, code, and config go into the issue as text.
+
+A merge by `github-actions[bot]` does not start other workflows. If a push to the default branch deploys your project, the merge of a requester's order does not deploy it.
 
 Who can send orders depends on who owns the repo:
 
@@ -152,7 +155,7 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
 ## Guardrails
 
 - Only a go from you opens `shop.sh lead` and `shop.sh queue`, and only for the orders that the go opens. One go starts each order once.
-- A lead cannot run `gh pr merge`. A helper cannot push and cannot run `gh pr`. A lead or helper cannot run `claude --bg` directly.
+- A lead cannot run `gh pr merge`, and a lead or helper cannot run `gh workflow run`. A helper cannot push and cannot run `gh pr`. A lead or helper cannot run `claude --bg` directly.
 - A lead or helper works on its own. It asks no questions, to main or to you. It decides each open point, and the lead lists its decisions in the `Decisions` section of the PR. Main reports them to you with the result.
 - A lead or helper cannot force-push or skip the git hooks with `--no-verify`. The same rules apply in any session while this skill is active, for example during `/shop commit`.
 - `shop.sh` reads the limits from `.claude/shop.json` in the main checkout. A PR cannot raise its own limits.
@@ -248,6 +251,7 @@ The sessions run these. You seldom need them.
 | `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet. |
 | `shop.sh queue [--issue <n>] <slug> <goal>` | main | Keeps your go, or an order from a requester, for a feature that must wait. |
 | `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. |
+| `shop.sh merge <pr> <sha>` | main | Squash-merges the PR at the commit that main checked. For the order of a requester, the workflow `shop-merge.yml` merges it as `github-actions[bot]`. |
 | `shop.sh helper <job> [goal]` | lead | Starts a helper in its own worktree, at the lead's last commit. |
 | `shop.sh close <name>` | main, lead | Stops a session and removes its worktree. For a lead, also removes the branch when its work is merged; an unmerged branch stays. It refuses while the PR is open or the worktree has changes. |
 | `shop.sh guard` | main | Waits in the background. It ends when a session needs main. In `shared` mode, it also ends on an order or a cancel from a requester, and it waits with no session. |
@@ -255,7 +259,7 @@ The sessions run these. You seldom need them.
 | `shop.sh note <text>` | any shop session | Shows the current step on the status page. |
 | `shop.sh status` | any | Lists the shop sessions and the worktrees. |
 | `shop.sh web` | any | Starts the status page and opens it. |
-| `shop.sh ci [install]` | any | Reports or adds the review workflows, and reports the token secret. |
+| `shop.sh ci [install]` | any | Reports or adds the review workflows, and in `shared` mode the merge workflow. Reports the token secret. |
 | `shop.sh token` | you, in a normal terminal | Creates the OAuth token and stores it as a repo secret. It refuses to run through Claude, so the token stays out of the conversation. |
 
 ## Files
