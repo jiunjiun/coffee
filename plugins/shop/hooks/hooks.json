@@ -5,6 +5,9 @@
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shop.sh\" prompt", "timeout": 5 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shop.sh\" stop", "timeout": 5 }] }
     ]
   }
 }

@@ -194,7 +194,7 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
    /plugin install shop@coffee
    ```
 
-   The plugin adds two hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt.
+   The plugin adds three hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt. The Stop hook stops main from ending a turn while the guard has work and does not run.
 
 3. Open Claude Code in your project root, and type `/shop setup`. Claude does these steps with you:
    - Picks a session name prefix, for example `ac-web`, and writes `.claude/shop.json`.
@@ -259,7 +259,7 @@ The sessions run these. You seldom need them.
 | `shop.sh feedback <pr>` | main, lead | Shows the PR comments of main's account and of the Claude review app, and counts the comments of other accounts. |
 | `shop.sh merge <pr> <sha>` | main | Squash-merges the PR at the commit that main checked. In `shared` mode, only a branch that a worktree of this repo holds, and the PR of a requester's order must close its issue. For the order of a requester, the workflow `shop-merge.yml` merges it as `github-actions[bot]`. |
 | `shop.sh helper <job> [goal]` | lead | Starts a helper in its own worktree, at the lead's last commit. |
-| `shop.sh close <name>` | main, lead | Stops a session and removes its worktree. For a lead, also removes the branch when its work is merged; an unmerged branch stays. It refuses while the PR is open or the worktree has changes. |
+| `shop.sh close [--discard] <name>` | main, lead | Stops a session and removes its worktree. For a lead, also removes the branch when its work is merged; an unmerged branch stays. It refuses while the PR is open or the worktree has changes. `--discard` is for a cancelled order: it closes the PR, and drops the changes and the branch. |
 | `shop.sh guard` | main | Waits in the background. It ends when a session needs main. In `shared` mode, it also ends on an order or a cancel from a requester, and it waits with no session. |
 | `shop.sh hold <resource> <slug\|free>` | main | Records who uses a shared resource. |
 | `shop.sh note <text>` | any shop session | Shows the current step on the status page. |

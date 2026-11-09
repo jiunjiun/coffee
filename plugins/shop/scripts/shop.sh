@@ -1,10 +1,10 @@
 #!/bin/bash
 # Session roles and session control for the shop skill.
 # Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief]
-#        | helper <job> [goal] | close <session name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha>
+#        | helper <job> [goal] | close [--discard] <session name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha>
 #        | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
 # The session name is the switch: only <prefix>-main starts leads, and only a lead starts helpers.
-# hook and prompt are Claude Code hooks: SessionStart and UserPromptSubmit.
+# hook, prompt, and stop are Claude Code hooks: SessionStart, UserPromptSubmit, and Stop.
 set -u
 
 die() { echo "shop: $1" >&2; exit 1; }
@@ -36,6 +36,11 @@ agents() { claude agents --json 2>/dev/null; }
 count() { agents | jq --arg re "$1" '[.[] | select((.name // "") | test($re))] | length'; }
 names() { agents | jq -r --arg re "$1" '.[] | select((.name // "") | test($re)) | .name'; }
 helpers_re() { echo "^$1-(?!lead\$)[a-z0-9]+\$"; }
+# One guard per main process. After a resume, the guard of the old process wakes no one: it ends after its sleep.
+guard_pidfile() { echo "$scratch/guard-${CLAUDE_PID:-}.pid"; }
+guard_runs() { kill -0 "$(cat "$(guard_pidfile)" 2>/dev/null)" 2>/dev/null; }
+# In shared mode, orders come as GitHub issues, so the guard has work also with no session.
+guard_has_work() { [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]]; }
 
 STALL_MIN=${STALL_MIN:-30}      # minutes with nothing happening; the tests set it
 GUARD_POLL=${GUARD_POLL:-120}   # seconds
@@ -171,7 +176,7 @@ issue_events() {
     n=$(cat "$scratch/working/$slug")
     state=$(gh issue view "$n" --json state,stateReason | jq -r '"\(.state) \(.stateReason // "")"')
     [[ -z $state || $state == OPEN* ]] && continue
-    [[ $state == *COMPLETED ]] || echo "CANCELLED #$n: its issue is closed (${state#CLOSED }). Close the PR and the lead of $slug."
+    [[ $state == *COMPLETED ]] || echo "CANCELLED #$n: its issue is closed (${state#CLOSED }). Run shop.sh close --discard $prefix-$slug-lead: it also closes the PR."
     rm -f "$scratch/working/$slug"
   done
 }
@@ -313,22 +318,28 @@ close_helper() {  # helper session name
   echo "closed $1"
 }
 
-close_lead() {  # lead session name
-  local base=${1%-lead} slug wt branch helper
+close_lead() {  # lead session name, discard
+  local base=${1%-lead} discard=${2:-} slug wt branch helper pr prs=
   slug=${base#"$prefix"-}
   wt=$main_root/.scratch/$slug/wt
   [[ -d $wt ]] || die "no worktree at $wt."
   branch=$(git -C "$wt" branch --show-current)
-  [[ -z $(git -C "$wt" status --porcelain) ]] || die "$wt has uncommitted changes."
-  [[ -z $(gh pr list --head "$branch" --state open --json number --jq '.[].number') ]] || die "the PR of $branch is open. Merge or close it first."
+  [[ -n $discard || -z $(git -C "$wt" status --porcelain) ]] ||
+    die "$wt has uncommitted changes. When its order is cancelled, drop them: shop.sh close --discard $1."
+  # An empty --head lists the PRs of every branch: a detached worktree has no PR.
+  [[ -n $branch ]] && prs=$(gh pr list --head "$branch" --state open --json number --jq '.[].number')
+  [[ -n $discard || -z $prs ]] || die "the PR of $branch is open. Merge or close it first."
   for helper in $(names "$(helpers_re "$base")"); do close_helper "$helper"; done
   stop_session "$1"
-  git worktree remove "$wt" || die "cannot remove $wt."
+  # Close the PR after the stop: a running lead can push to it again.
+  for pr in $prs; do gh pr close "$pr" >/dev/null || die "cannot close PR #$pr."; done
+  git worktree remove ${discard:+--force} "$wt" || die "cannot remove $wt."
   rmdir "$main_root/.scratch/$slug" 2>/dev/null
   rm -f "$scratch/working/$slug" "$scratch/leads/$slug"
   event close "$slug" "$1"
-  # Delete the branch only when its work is on the default branch: a merged PR, or no commit of its own.
-  if [[ -n $(gh pr list --head "$branch" --state merged --json number --jq '.[].number') ]] ||
+  # Delete the branch only when its work is on the default branch: a merged PR, or no commit of its own. Or when its
+  # order is cancelled: GitHub keeps the commits of a closed PR.
+  if [[ -n $discard ]] || [[ -n $(gh pr list --head "$branch" --state merged --json number --jq '.[].number') ]] ||
     git merge-base --is-ancestor "$branch" "$(default_branch)"; then
     git branch -qD "$branch"
     git push -q origin --delete "$branch" 2>/dev/null
@@ -339,12 +350,14 @@ close_lead() {  # lead session name
 }
 
 cmd_close() {
-  local target=${1:-}
+  local target discard=
+  [[ ${1:-} == --discard ]] && { discard=1; shift; }
+  target=${1:-}
   [[ -n $target && $target != "$prefix-main" ]] || die "name a lead or a helper."
   case $role in
     main)
       [[ $target == "$prefix"-* ]] || die "$target is not in this shop."
-      if [[ $target == *-lead ]]; then close_lead "$target"; else close_helper "$target"; fi
+      if [[ $target == *-lead ]]; then close_lead "$target" "$discard"; else close_helper "$target"; fi
       ;;
     lead)
       [[ $target != "$name" && $target =~ ^${name%-lead}-[a-z0-9]+$ ]] || die "a lead closes only its own helpers."
@@ -584,9 +597,10 @@ cmd_stalled() {
 # session: orders come as GitHub issues.
 cmd_guard() {
   need main
-  local pidfile=$scratch/guard.pid out
+  local pidfile out
+  pidfile=$(guard_pidfile)
   mkdir -p "$scratch"
-  if [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  if guard_runs; then
     echo "guard already runs"
     return
   fi
@@ -601,7 +615,7 @@ cmd_guard() {
     # The sleep comes before the session checks: a session just started is not in the list yet. Main gone: no one is
     # left to wake.
     sleep "$GUARD_POLL" && ps -p "${CLAUDE_PID:-1}" >/dev/null || return
-    [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]] || { echo "no shop session left"; return; }
+    guard_has_work || { echo "no shop session left"; return; }
     out=$(cmd_stalled)
     [[ -z $out ]] || { echo "$out"; return; }
   done
@@ -613,11 +627,21 @@ cmd_hook() {
   [[ $role == main ]] || exit 0
   text="Shop role: main. This session is $name. Load the shop skill before you act on a request that changes code."
   # SessionStart runs on start, resume, and compact. A resume starts a new process, and the old guard ends with the old
-  # one. So remind main whenever the guard has work: the same test as in cmd_guard.
+  # one. So remind main whenever the guard has work.
   [[ $mode == shared ]] && watch+=", and GitHub issues for orders from requesters"
-  [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]] &&
+  guard_has_work &&
     text+=" Run the guard now with run_in_background (shop.sh guard, the T of the shop skill): it watches the $watch. It says so when one already runs."
   jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $t}}'
+}
+
+# Main ends a turn also to ask the user, and can wait hours for the answer. With no guard, no one sees the orders,
+# the cancels, and the stalls in that time. The second stop in a row passes: the hook does not loop.
+cmd_stop() {
+  local input
+  input=$(cat)
+  [[ $role == main ]] && ! guard_runs || exit 0
+  jq -e '.stop_hook_active != true' >/dev/null <<<"$input" && guard_has_work || exit 0
+  jq -n '{decision: "block", reason: "The shop guard does not run. Run shop.sh guard (the T of the shop skill) with run_in_background, then end the turn."}'
 }
 
 # The issue of an order, for main and a lead. Main's read is the review: it saves the order text for gate. The lead of
@@ -707,6 +731,7 @@ case $cmd in
   role) echo "role=$role name=${name:-unnamed} prefix=${prefix:-none} mode=${mode:-none} remote_control=${CLAUDE_CODE_BRIDGE_SESSION_ID:+on}" ;;
   hook) cmd_hook ;;
   prompt) cmd_prompt "$input" ;;
+  stop) cmd_stop ;;
   status) cmd_status ;;
   stalled) cmd_stalled ;;
   guard) cmd_guard ;;
@@ -724,5 +749,5 @@ case $cmd in
   lead) cmd_lead "$@" ;;
   helper) cmd_helper "$@" ;;
   close) cmd_close "$@" ;;
-  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close <name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
+  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close [--discard] <name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
 esac

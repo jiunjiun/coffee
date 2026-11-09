@@ -32,6 +32,7 @@ flag=\${*: -2:1} filter=\${*: -1}
 [[ \$1 == issue && \$2 == list ]] && { cat "$tmp/issues.json" 2>/dev/null || echo '[]'; exit; }
 [[ \$1 == pr && \$2 == view ]] && { show "$tmp/pr-\$3.json"; exit; }
 [[ \$1 == pr && \$2 == merge ]] && { echo "\$*" >>"$tmp/merge.log"; exit; }
+[[ \$1 == pr && \$2 == close ]] && { echo "\$*" >>"$tmp/pr-close.log"; rm -f "$tmp/open-pr"; exit; }
 [[ \$1 == run && \$2 == list ]] && {
   [[ -f $tmp/no-workflow ]] && { echo "could not find any workflows named shop-merge.yml" >&2; exit 1; }
   show "$tmp/runs.json"
@@ -397,21 +398,26 @@ want "BLOCKED ac-web-q-lead: it waits for permission prompt" "blocked needs no w
 quiet_lead; idle_for 2900
 out=$(GUARD_POLL=0.05 run guard)
 want "STALLED ac-web-q-lead" "guard ends on a stall" "$out"
-[[ ! -e .scratch/shop/guard.pid ]] || { echo "FAIL guard removes its pid file"; failed=1; }
+[[ ! -e .scratch/shop/guard-1.pid ]] || { echo "FAIL guard removes its pid file"; failed=1; }
 agents_are '[]'
 want "no shop session left" "guard ends with no session" "$(GUARD_POLL=0.05 run guard)"
-sleep 300 &
-job=$!
-echo "$job" >.scratch/shop/guard.pid
+echo $$ >.scratch/shop/guard-1.pid  # this test shell runs as the guard
 want "guard already runs" "one guard" "$(run guard)"
-kill "$job"; wait "$job" 2>/dev/null
-rm .scratch/shop/guard.pid
+cp "$tmp/.claude/sessions/1.json" "$tmp/.claude/sessions/2.json"  # main 2: the same main after a resume
+[[ $(CLAUDE_PID=2 GUARD_POLL=0.05 run guard) != *"already runs"* ]] || { echo "FAIL a resumed main does not count the guard of its old process"; failed=1; }
+rm .scratch/shop/guard-1.pid "$tmp/.claude/sessions/2.json"
 
 # Shared mode: requesters send orders as GitHub issues.
 echo '{"prefix":"ac-web","mode":"shared"}' >.claude/shop.json
 agents_are '[]'
 want "mode=shared" "role shows the mode" "$(run role)"
 want "GitHub issues" "hook tells a shared main to run the guard" "$(echo '{}' | "$shop" hook)"
+want '"decision": "block"' "a shared main cannot end a turn with no guard" "$(echo '{}' | "$shop" stop)"
+[[ -z $(echo '{"stop_hook_active":true}' | "$shop" stop) ]] || { echo "FAIL the stop hook does not loop"; failed=1; }
+echo $$ >.scratch/shop/guard-1.pid
+[[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL main ends a turn while the guard runs"; failed=1; }
+rm .scratch/shop/guard-1.pid
+as ac-web-x-lead; [[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL the stop hook is for main only"; failed=1; }; as ac-web-main
 new_main() {  # a main process that is gone: a guard for it ends after its first sleep
   true & main_pid=$!
   wait "$main_pid"
@@ -435,7 +441,7 @@ job=$!
 sleep 0.5
 kill -0 "$job" 2>/dev/null || { echo "FAIL a shared guard waits with no session and no order"; failed=1; }
 kill "$job"; wait "$job" 2>/dev/null
-rm -f .scratch/shop/guard.pid
+rm -f .scratch/shop/guard-1.pid
 [[ ! -s $tmp/guard.out ]] || { echo "FAIL main's issue, an issue with no mark, and a stranger's issue are no orders: $(cat "$tmp/guard.out")"; failed=1; }
 issue 15 amy OPEN "$mark
 Order: export CSV (issue-csv)"
@@ -517,14 +523,19 @@ as plain-name; want "needs a main or lead" "plain cannot read feedback" "$(run f
 issue 15 amy CLOSED "$mark" NOT_PLANNED
 out=$(guard_once)
 want "CANCELLED #15" "guard reports a cancel" "$out"
-want "the lead of issue-csv" "a cancel names the lead" "$out"
+want "close --discard ac-web-issue-csv-lead: it also closes the PR" "a cancel names the lead and the way to close it" "$out"
 [[ ! -e .scratch/shop/working/issue-csv ]] || { echo "FAIL guard reports a cancel once"; failed=1; }
 echo 17 >.scratch/shop/working/issue-done
 issue 17 amy CLOSED "$mark" COMPLETED
 [[ $(guard_once) != *CANCELLED* ]] || { echo "FAIL a merge is no cancel"; failed=1; }
 [[ ! -e .scratch/shop/working/issue-done ]] || { echo "FAIL guard stops watching a closed issue"; failed=1; }
 echo 16 >.scratch/shop/working/issue-csv
-want "closed ac-web-issue-csv-lead" "main closes the lead of an order" "$(run close ac-web-issue-csv-lead)"
+git -C .scratch/issue-csv/wt commit -q --allow-empty -m draft
+echo draft >.scratch/issue-csv/wt/draft.txt
+want "close --discard ac-web-issue-csv-lead" "close names the way to drop the draft of a cancelled order" "$(run close ac-web-issue-csv-lead)"
+echo 20 >"$tmp/open-pr"
+want "closed ac-web-issue-csv-lead, $PWD/.scratch/issue-csv/wt, feat/issue-csv" "main drops the draft and the branch of a cancelled order" "$(run close --discard ac-web-issue-csv-lead)"
+want "pr close 20" "close --discard closes the open PR of a cancelled order" "$(cat "$tmp/pr-close.log")"
 [[ ! -e .scratch/shop/working/issue-csv ]] || { echo "FAIL close ends the watch of its issue"; failed=1; }
 echo 'the brief of 16' >.scratch/shop/brief-16.md
 want "session=ac-web-issue-csv-lead" "an order starts again after close" "$(run lead --issue 16 feat issue-csv g)"
@@ -567,6 +578,7 @@ echo '{"prefix":"ac-web"}' >.claude/shop.json
 want "under main's account" "in solo mode, main merges each PR" "$(run merge 6 $sha)"
 agents_are '[]'
 [[ $(echo '{}' | "$shop" hook) != *"Run the guard"* ]] || { echo "FAIL a solo main with no lead gets no guard reminder"; failed=1; }
+[[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL a solo main with no lead ends a turn with no guard"; failed=1; }
 agents_are "[$(bg ac-web-a-lead)]"
 want "Run the guard" "a resumed solo main with a lead runs the guard again" "$(echo '{}' | "$shop" hook)"
 agents_are '[]'
