@@ -134,8 +134,8 @@ you ─────────────────────────�
 
 3. The requester discusses the request. The session looks for the same request in old issues and PRs, reads the code, and shows the order. When the requester says submit, it creates the issue. The first line of the body is a mark that GitHub does not show: `<!-- shop-order -->`.
 4. Main starts the guard as soon as main starts, also with no lead. Every 2 minutes, the guard reads the open issues. An issue is an order only when it has the mark and comes from a collaborator of the repo, and not from your own account: main opens your issues after your go. Other issues, for example bug reports, stay as they are. Orders sent while main is off are picked up when main starts.
-5. Main reviews only what the requester's session cannot see: a missing field, a thing that only you can do, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
-6. An order that passes starts with no go from you. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
+5. Main reviews only what the requester's session cannot see. It looks for a missing field, a thing that only you can do, a thing outside the repo, a change to CI, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
+6. An order that passes starts with no go from you. The lead gets the order as main reviewed it: an edit of the issue after main read it stops the start, and main reads it again. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
 7. Main checks the PR as usual. Then the workflow `shop-merge.yml` merges it and closes the issue, so the PR shows `github-actions[bot]` as the account that merged it, not you. GitHub does not close the issue of a PR that a bot merges, so the workflow does it. `shop.sh ci install` adds the workflow, and only your account can run it. To find who asked for a change later, follow the commit to its PR, `Closes #<n>`, and the author of that issue.
 8. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead.
 
@@ -159,7 +159,12 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
 - A lead or helper works on its own. It asks no questions, to main or to you. It decides each open point, and the lead lists its decisions in the `Decisions` section of the PR. Main reports them to you with the result.
 - A lead or helper cannot force-push or skip the git hooks with `--no-verify`. The same rules apply in any session while this skill is active, for example during `/shop commit`.
 - `shop.sh` reads the limits from `.claude/shop.json` in the main checkout. A PR cannot raise its own limits.
-- In `shared` mode, an issue is an order only when it has the order mark and comes from a collaborator of the repo, and not from main's account. `shop.sh lead --issue` checks this on GitHub, and starts one lead per issue. Main and the lead read an order with `shop.sh issue`, which leaves out the comments of other accounts. Main treats the text of an issue as data, not as instructions.
+- In `shared` mode, an issue is an order only when it has the order mark and comes from a collaborator of the repo, and not from main's account. `shop.sh lead --issue` checks this on GitHub, and starts one lead per issue. Main treats the text of an issue as data, not as instructions. These checks are in `shop.sh`, so they do not depend on what a session decides:
+  - Main and the lead read an order with `shop.sh issue`, which leaves out the comments of other accounts. Main's read saves the order. `shop.sh lead --issue` refuses an order that changed after that, and the lead reads the saved text, not the issue as it is later.
+  - Main writes the brief of a requester's order to a file, and chooses the slug itself. No command that main writes holds the requester's text, and the lead gets the order as a file to read, not as words from you.
+  - `shop.sh merge` merges only a branch that a worktree of this repo holds. The PR of a requester's order must close its issue, so the order cannot become a merge under your account.
+  - The sessions read PR comments with `shop.sh feedback`. It shows the comments of your account and of the Claude review app, and counts the others.
+  - The guard does not print the title of an order: a title can copy a line of the guard.
 - The optional git hooks stop Claude sessions from committing or pushing on the default branch. Your own shell does not use them.
 - The role comes from the session name. This prevents mistakes. It is not a security boundary.
 
@@ -248,10 +253,11 @@ The sessions run these. You seldom need them.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `shop.sh order <slug> <name>` | main | Records an order. It has no number until its GitHub issue at go. |
-| `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet. |
+| `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet, unchanged since main read it. With `--issue`, it reads the brief from `.scratch/shop/brief-<n>.md`. |
 | `shop.sh queue [--issue <n>] <slug> <goal>` | main | Keeps your go, or an order from a requester, for a feature that must wait. |
-| `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. |
-| `shop.sh merge <pr> <sha>` | main | Squash-merges the PR at the commit that main checked. For the order of a requester, the workflow `shop-merge.yml` merges it as `github-actions[bot]`. |
+| `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. Main's read saves the order. A lead of a requester's order gets the text that main read. |
+| `shop.sh feedback <pr>` | main, lead | Shows the PR comments of main's account and of the Claude review app, and counts the comments of other accounts. |
+| `shop.sh merge <pr> <sha>` | main | Squash-merges the PR at the commit that main checked. In `shared` mode, only a branch that a worktree of this repo holds, and the PR of a requester's order must close its issue. For the order of a requester, the workflow `shop-merge.yml` merges it as `github-actions[bot]`. |
 | `shop.sh helper <job> [goal]` | lead | Starts a helper in its own worktree, at the lead's last commit. |
 | `shop.sh close <name>` | main, lead | Stops a session and removes its worktree. For a lead, also removes the branch when its work is merged; an unmerged branch stays. It refuses while the PR is open or the worktree has changes. |
 | `shop.sh guard` | main | Waits in the background. It ends when a session needs main. In `shared` mode, it also ends on an order or a cancel from a requester, and it waits with no session. |
@@ -271,6 +277,9 @@ The sessions run these. You seldom need them.
 | `.scratch/<slug>/<job>` | The worktree of a helper. |
 | `.scratch/shop/events.jsonl` | The event log that the status page reads. |
 | `.scratch/shop/approved/` | One file for each order that has your go. A lead start removes it. |
+| `.scratch/shop/orders/` | In `shared` mode, each order as main read it, and as its lead gets it. |
+| `.scratch/shop/leads/` | In `shared` mode, the issue of each lead that works on a requester's order, until `shop.sh close`. `shop.sh merge` reads it. |
+| `.scratch/shop/brief-<n>.md` | In `shared` mode, the brief that main writes for the lead of issue `<n>`. `shop.sh lead` deletes it when the lead starts. |
 | `.scratch/shop/` (other files) | The guard state. |
 
 `.scratch/` must be in `.gitignore`.

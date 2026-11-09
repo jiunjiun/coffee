@@ -21,11 +21,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
-      # gh pr view does not show inline comments, so a reviewer cannot see its earlier findings without this file.
+      # gh pr view does not show inline comments, so a reviewer cannot see its earlier findings without this file. Only
+      # Claude's own: the text of other accounts does not go into the reviewer's prompt.
       - name: Save earlier inline comments
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" --jq '.[] | "\(.path):\(.line // .original_line) \(.body)"' > earlier-comments.txt
+        run: gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" --jq '.[] | select(.user.login == "claude[bot]") | "\(.path):\(.line // .original_line) \(.body)"' > earlier-comments.txt
       - id: claude
         uses: anthropics/claude-code-action@v1
         with:
@@ -38,7 +39,7 @@ jobs:
 
             Report only concrete, exploitable problems that this pull request adds. Look for private data that leaves the system or that is stored or exported without protection, a network request to a new host, secrets in code, and unsafe handling of files, URLs, or database input.
             Do not report style, code quality, or theoretical problems. If you are not sure that a problem is real, do not report it.
-            The file earlier-comments.txt lists the inline comments on this pull request. Do not post a finding that it already states.
+            The file earlier-comments.txt lists your earlier inline comments on this pull request. Do not post a finding that it already states.
 
             Post each finding as one inline comment on its line. Say how an attacker uses the problem. Post nothing when there are no findings.
           # The official security review action needs an API key. This setup uses only the OAuth token.
