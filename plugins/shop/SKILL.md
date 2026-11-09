@@ -13,6 +13,7 @@ The session name decides the role. `.claude/shop.json` in the project holds the 
 | `<prefix>-main` | main: talks to the user, writes the orders, merges every PR |
 | `<prefix>-<slug>-lead` | lead: owns one feature from worktree to ready PR |
 | `<prefix>-<slug>-<job>` | helper: shares the work of one lead, in parallel: research, analysis, feedback, review |
+| `<prefix>-order` | order: the session of the `order` plugin. It writes orders, and submits each one as an issue after the user's go |
 | any other name | plain: not in the shop |
 
 ## Start
@@ -24,6 +25,7 @@ Run `T role`, then follow the first line that matches:
 - The user said `/shop main`: a hook has named the session. Report the role and the Remote Control state from `T role`. Only the user can turn Remote Control on: `/rc`. If the hook said that main is already running, tell the user the name of that session. When `T role` says `mode=shared`, run `T guard` with `run_in_background` now: it watches GitHub issues for orders from requesters. Then wait for the user's request.
 - The user said `/shop watch` or `/shop web`: run `T web`. It starts the status page and opens it in the browser. Give the user the address that it prints.
 - `role=none`: tell the user to run `/shop setup`, then stop.
+- `role=order`: follow the order skill.
 - `role=plain`: tell the user that this session is not in the shop and that `/shop main` makes it main. Do the task yourself, with no sessions.
 - `role=main`, `role=lead`, or `role=helper`: follow that section.
 

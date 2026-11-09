@@ -20,6 +20,7 @@ main reads PR #41 and PR #42, merges them, and tells you the result.
 | main | `<prefix>-main` | Talks to you, writes the order, starts leads, merges every PR |
 | lead | `<prefix>-<slug>-lead` | Owns one feature: worktree, code, tests, PR, review fixes |
 | helper | `<prefix>-<slug>-<job>` | Does one part of a lead's work in parallel: research, a function, a review |
+| order | `<prefix>-order` | A requester's session with the `order` plugin: writes orders, and submits each one after the requester's go. See [Orders from your team](#orders-from-your-team) |
 
 The session name sets the role. A session with another name is not in the shop, and works as usual.
 
@@ -94,7 +95,7 @@ The issue gets a comment only at these points, and when the lead's plan changes.
 
 ## Saying go
 
-A hook reads each message that you send to main. It uses fixed rules, not a model, so a session cannot say go for you.
+A hook reads each message that you send to main. It uses fixed rules, not a model, so a session cannot say go for you. The order session of a requester uses the same hook and the same rules: there, a go submits the order.
 
 A message is a go when it has the word `go` at the start, after punctuation, after a number, after a Chinese character, or after a word like `ok`, `yes`, or `then`. The hook then opens:
 
@@ -125,14 +126,14 @@ you ─────────────────────────�
 ```
 
 1. Set `"mode": "shared"` in `.claude/shop.json`. `/shop setup` asks for it.
-2. Each requester installs the `order` plugin once, as in [Install](#install), and types `/order` in their clone of the repo:
+2. Each requester installs the `order` plugin once, as in [Install](#install), and types `/order` in their clone of the repo. A hook names that session `<prefix>-order`:
 
    ```
    /plugin marketplace add jiunjiun/coffee
    /plugin install order@coffee
    ```
 
-3. The requester discusses the request. The session looks for the same request in old issues and PRs, reads the code, and shows the order. When the requester says submit, it creates the issue. The first line of the body is a mark that GitHub does not show: `<!-- shop-order -->`.
+3. The requester discusses the request. The session looks for the same request in old issues and PRs, reads the code, and shows the order. When the requester says go, it creates the issue. The go follows the same rules as a go to main, see [Saying go](#saying-go): with no go, `shop.sh submit` refuses to create the issue. The first line of the body is a mark that GitHub does not show: `<!-- shop-order -->`.
 4. Main starts the guard as soon as main starts, also with no lead. Every 2 minutes, the guard reads the open issues. An issue is an order only when it has the mark and comes from a collaborator of the repo, and not from your own account: main opens your issues after your go. Other issues, for example bug reports, stay as they are. Orders sent while main is off are picked up when main starts.
 5. Main reviews only what the requester's session cannot see. It looks for a missing field, a thing that only you can do, a thing outside the repo, a change to CI, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
 6. An order that passes starts with no go from you. The lead gets the order as main reviewed it: an edit of the issue after main read it stops the start, and main reads it again. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
@@ -194,7 +195,7 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
    /plugin install shop@coffee
    ```
 
-   The plugin adds three hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt. The Stop hook stops main from ending a turn while the guard has work and does not run.
+   The plugin adds three hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt. The Stop hook stops main from ending a turn while the guard has work and does not run. The `order` plugin runs the same script from the same SessionStart and UserPromptSubmit hooks: a change to the go rules changes both plugins.
 
 3. Open Claude Code in your project root, and type `/shop setup`. Claude does these steps with you:
    - Picks a session name prefix, for example `ac-web`, and writes `.claude/shop.json`.
@@ -252,7 +253,8 @@ The sessions run these. You seldom need them.
 
 | Command | Who | What it does |
 | --- | --- | --- |
-| `shop.sh order <slug> <name>` | main | Records an order. It has no number until its GitHub issue at go. |
+| `shop.sh order <slug> <name>` | main, order | Records an order. It has no number until its GitHub issue at go. |
+| `shop.sh submit <slug> <title>` | order | Creates the GitHub issue of an order, with the order mark, from the order text on stdin. It needs the requester's go for that order. |
 | `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet, unchanged since main read it. With `--issue`, it reads the brief from `.scratch/shop/brief-<n>.md`. |
 | `shop.sh queue [--issue <n>] <slug> <goal>` | main | Keeps your go, or an order from a requester, for a feature that must wait. |
 | `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. Main's read saves the order. A lead of a requester's order gets the text that main read. |

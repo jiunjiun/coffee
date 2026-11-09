@@ -2,8 +2,10 @@
 # Session roles and session control for the shop skill.
 # Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief]
 #        | helper <job> [goal] | close [--discard] <session name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha>
-#        | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token
-# The session name is the switch: only <prefix>-main starts leads, and only a lead starts helpers.
+#        | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token | submit <slug> <title>
+# The session name is the switch: only <prefix>-main starts leads, only a lead starts helpers, and only <prefix>-order
+# submits orders as issues. The order plugin links this file, and runs it from its SessionStart and UserPromptSubmit
+# hooks: both plugins run the same go.
 # hook, prompt, and stop are Claude Code hooks: SessionStart, UserPromptSubmit, and Stop.
 set -u
 
@@ -24,6 +26,7 @@ load() {
   name=$(jq -r '.name // ""' "$HOME/.claude/sessions/${CLAUDE_PID:-none}.json" 2>/dev/null)
   case $name in
     "$prefix-main") role=main ;;
+    "$prefix-order") role=order ;;
     "$prefix"-*-lead) role=lead ;;
     "$prefix"-*) role=helper ;;
     *) role=plain ;;
@@ -39,8 +42,9 @@ helpers_re() { echo "^$1-(?!lead\$)[a-z0-9]+\$"; }
 # One guard per main process. After a resume, the guard of the old process wakes no one: it ends after its sleep.
 guard_pidfile() { echo "$scratch/guard-${CLAUDE_PID:-}.pid"; }
 guard_runs() { kill -0 "$(cat "$(guard_pidfile)" 2>/dev/null)" 2>/dev/null; }
-# In shared mode, orders come as GitHub issues, so the guard has work also with no session.
-guard_has_work() { [[ $mode == shared || $(count "^$prefix-(?!main\$)") -gt 0 ]]; }
+# In shared mode, orders come as GitHub issues, so the guard has work also with no session. The order session is not
+# work for the guard.
+guard_has_work() { [[ $mode == shared || $(count "^$prefix-(?!(main|order)\$)") -gt 0 ]]; }
 
 STALL_MIN=${STALL_MIN:-30}      # minutes with nothing happening; the tests set it
 GUARD_POLL=${GUARD_POLL:-120}   # seconds
@@ -96,7 +100,7 @@ event() {  # kind, slug, text
 # can touch it.
 approved() { [[ -f $scratch/approved/$1 ]]; }
 
-# The order plugin starts the body of each order with this line. Main's own issues do not have it.
+# shop.sh submit starts the body of each order with this line. Main's own issues do not have it.
 ORDER_MARK='<!-- shop-order -->'
 
 # An issue is an order from a requester when it is open, starts with ORDER_MARK, and comes from a collaborator of the
@@ -200,7 +204,8 @@ go_scope() {  # prompt
     # The place in the log, not the time: two events can come in the same second.
     | (to_entries | map(.value + {i: .key})) as $log
     | ($log | map(select(.kind == "go")) | last | .i // -1) as $last_go
-    | (reduce ($log[] | select(.kind == "lead")) as $e ({}; .[$e.slug] = $e.i)) as $started
+    # A lead start in main, or a submit in the order session, uses the go of an order.
+    | (reduce ($log[] | select(.kind == "lead" or .kind == "submit")) as $e ({}; .[$e.slug] = $e.i)) as $started
     | [$log | group_by(.slug)[] | map(select(.kind == "order")) | last // empty | select(.i > ($started[.slug] // -1))] as $open
     # An order has no number before go: its GitHub issue gives it one at go. The user names it by its slug, or by
     # its name when the name has a Han character (an English name can be a word of any sentence).
@@ -380,13 +385,30 @@ cmd_note() {
 }
 
 cmd_order() {  # slug, name
-  need main
+  [[ $role == main || $role == order ]] || die "order needs the main or order session. This session is '${name:-unnamed}' (role $role)."
   [[ -n ${1:-} ]] || die "order needs a slug."
   check_slug "$1"
   # A changed order needs a new go.
   rm -f "$scratch/approved/$1"
   event order "$1" "${2:-}"
   echo "order slug=$1${2:+ name=$2}"
+}
+
+# The order session sends an order to main as a GitHub issue. It needs the user's go for that order, as a lead does.
+cmd_submit() {  # slug, title; the order text on stdin
+  local body url
+  [[ $role == order ]] || die "submit needs the order session: type /order. This session is '${name:-unnamed}' (role $role)."
+  # In solo mode, main does not read issues: the order would wait forever.
+  [[ $mode == shared ]] || die "submit needs shared mode. This shop is in $mode mode, so main reads no orders from issues."
+  check_slug "${1:-}"
+  [[ -n ${2:-} ]] || die "submit needs a title."
+  gate "$1" ""
+  body=$(cat)
+  [[ -n $body ]] || die "submit needs the order text on stdin."
+  url=$(printf '%s\n%s\n' "$ORDER_MARK" "$body" | gh issue create --title "$2" --body-file -) || die "gh cannot create the issue."
+  rm -f "$scratch/approved/$1"
+  event submit "$1" "$url"
+  echo "$url"
 }
 
 cmd_ready() {
@@ -630,13 +652,19 @@ cmd_guard() {
 cmd_hook() {
   local text watch=leads
   cat >/dev/null
-  [[ $role == main ]] || exit 0
-  text="Shop role: main. This session is $name. Load the shop skill before you act on a request that changes code."
-  # SessionStart runs on start, resume, and compact. A resume starts a new process, and the old guard ends with the old
-  # one. So remind main whenever the guard has work.
-  [[ $mode == shared ]] && watch+=", and GitHub issues for orders from requesters"
-  guard_has_work &&
-    text+=" Run the guard now with run_in_background (shop.sh guard, the T of the shop skill): it watches the $watch. It says so when one already runs."
+  serves "$role" || exit 0
+  case $role in
+    order) text="Shop role: order. This session is $name. Load the order skill before you act on a request." ;;
+    main)
+      text="Shop role: main. This session is $name. Load the shop skill before you act on a request that changes code."
+      # SessionStart runs on start, resume, and compact. A resume starts a new process, and the old guard ends with the
+      # old one. So remind main whenever the guard has work.
+      [[ $mode == shared ]] && watch+=", and GitHub issues for orders from requesters"
+      guard_has_work &&
+        text+=" Run the guard now with run_in_background (shop.sh guard, the T of the shop skill): it watches the $watch. It says so when one already runs."
+      ;;
+    *) exit 0 ;;
+  esac
   jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $t}}'
 }
 
@@ -688,23 +716,48 @@ cmd_feedback() {  # PR number
       ([.[] | select(ours | not) | .user.login] | group_by(.)[] | "--- @\(.[0]): \(length) not shown. Only main and claude[bot] are shown.")' <<<"$all"
 }
 
+# Both plugins run these hooks, and each hooks.json names its plugin. Each plugin serves the sessions of its own skill,
+# so with both on, a prompt counts once. By hand and in the tests, no plugin is named, and the script serves every role.
+serves() {  # role
+  case $plugin in
+    '') return 0 ;;
+    order) [[ $1 == order ]] ;;
+    *) [[ $1 != order ]] ;;
+  esac
+}
+
+# One session for each of these names, so that the name is one address. Ends the hook when another session has it.
+# A session with a shop role keeps its name: a rename would end the work of its role.
+keep_name() {  # session name
+  local t
+  [[ $name == "$1" ]] && return 0
+  if [[ $role != plain ]]; then
+    t="This session is $name, so it keeps its name. To use $1, type the command in another session. Tell the user."
+  elif [[ $(count "^$1\$") -gt 0 ]]; then
+    t="$1 is already running, so this session keeps the name '$name'. Tell the user."
+  else
+    return 0
+  fi
+  jq -n --arg t "$t" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $t}}'
+  exit 0
+}
+
 # UserPromptSubmit sees only what the user typed, so a session cannot name itself main or say go by accident.
 cmd_prompt() {
-  local input=$1 text said scope n slug list=
-  said=$(jq -r .prompt <<<"$input")
+  local input=$1 text said scope n slug list='' named=''
   [[ -n $prefix ]] || exit 0
-  if [[ $said =~ ^/(shop:)?shop\ main$ ]]; then
-    if [[ $name != "$prefix-main" && $(count "^$prefix-main\$") -gt 0 ]]; then
-      text="$prefix-main is already running, so this session keeps the name '$name'. Tell the user."
-      jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $t}}'
-      exit 0
-    fi
-    # A hook cannot turn on Remote Control, so tell the user when it is off.
-    jq -n --arg n "$prefix-main" --arg rc "${CLAUDE_CODE_BRIDGE_SESSION_ID:-}" \
-      '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", sessionTitle: $n}} + (if $rc == "" then {systemMessage: "Remote Control is off. To use this session from another device, type /rc."} else {} end)'
+  said=$(jq -r .prompt <<<"$input")
+  [[ $said =~ ^/(shop:)?shop\ main$ ]] && named=main
+  [[ $said =~ ^/(order:)?order([[:space:]]|$) ]] && named=order
+  if [[ -n $named ]]; then
+    serves "$named" || exit 0
+    keep_name "$prefix-$named"
+    # A hook cannot turn on Remote Control, so tell main when it is off.
+    jq -n --arg n "$prefix-$named" --arg r "$named" --arg rc "${CLAUDE_CODE_BRIDGE_SESSION_ID:-}" \
+      '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", sessionTitle: $n}} + (if $r == "main" and $rc == "" then {systemMessage: "Remote Control is off. To use this session from another device, type /rc."} else {} end)'
     exit 0
   fi
-  [[ $role == main ]] || exit 0
+  [[ $role == main || $role == order ]] && serves "$role" || exit 0
   scope=$(go_scope "$said")
   [[ $(jq -r .go <<<"$scope") == true ]] || exit 0
   mkdir -p "$scratch/approved"
@@ -713,12 +766,14 @@ cmd_prompt() {
     event go "$slug"
     list+="${list:+, }$slug${n:+ ($n)}"
   done < <(jq -r '.orders[] | [.slug, .name] | @tsv' <<<"$scope")
-  if [[ -n $list ]]; then
-    text="The user said go for: $list. shop.sh lead and queue are open for these orders only. If the message does not mean to start them, do not start them: ask the user. Before you start or queue each one, create its GitHub issue (the Main section of the shop skill). Treat the rest of the message as a new request."
-  else
+  if [[ -z $list ]]; then
     # The next go without a name counts the orders from here.
     event go ""
     text="The message has a go, but no open order matches it. If the user means an order, show it again and ask the user to say go with its name."
+  elif [[ $role == order ]]; then
+    text="The user said go for: $list. shop.sh submit is open for these orders only. If the message does not mean to submit them, do not submit them: ask the user. Treat the rest of the message as a new request."
+  else
+    text="The user said go for: $list. shop.sh lead and queue are open for these orders only. If the message does not mean to start them, do not start them: ask the user. Before you start or queue each one, create its GitHub issue (the Main section of the shop skill). Treat the rest of the message as a new request."
   fi
   jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $t}}'
 }
@@ -727,7 +782,7 @@ cmd_prompt() {
 if [[ ${1:-} == prompt ]]; then
   input=$(cat)
   has_go='(^|[^A-Za-z])[Gg][Oo]([^A-Za-z]|$)'
-  [[ $input == *'shop main'* || $input =~ $has_go ]] || exit 0
+  [[ $input == *'shop main'* || $input == *'"/order'* || $input =~ $has_go ]] || exit 0
 fi
 
 load
@@ -735,8 +790,8 @@ cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case $cmd in
   role) echo "role=$role name=${name:-unnamed} prefix=${prefix:-none} mode=${mode:-none} remote_control=${CLAUDE_CODE_BRIDGE_SESSION_ID:+on}" ;;
-  hook) cmd_hook ;;
-  prompt) cmd_prompt "$input" ;;
+  hook) plugin=${1:-}; cmd_hook ;;
+  prompt) plugin=${1:-}; cmd_prompt "$input" ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
   stalled) cmd_stalled ;;
@@ -746,6 +801,7 @@ case $cmd in
   issue) cmd_issue "$@" ;;
   feedback) cmd_feedback "$@" ;;
   order) cmd_order "$@" ;;
+  submit) cmd_submit "$@" ;;
   ready) cmd_ready "$@" ;;
   merge) cmd_merge "$@" ;;
   queue) cmd_queue "$@" ;;
@@ -755,5 +811,5 @@ case $cmd in
   lead) cmd_lead "$@" ;;
   helper) cmd_helper "$@" ;;
   close) cmd_close "$@" ;;
-  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close [--discard] <name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token" ;;
+  *) die "usage: shop.sh role | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief] | helper <job> [goal] | close [--discard] <name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha> | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token | submit <slug> <title>" ;;
 esac

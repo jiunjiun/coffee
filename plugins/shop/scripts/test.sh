@@ -28,6 +28,7 @@ cat >"$tmp/bin/gh" <<STUB
 }
 show() { if [[ \$flag == --jq ]]; then jq -r "\$filter" "\$1"; else cat "\$1"; fi; }  # a file, filtered like gh --jq
 flag=\${*: -2:1} filter=\${*: -1}
+[[ \$1 == issue && \$2 == create ]] && { echo "\$*" >>"$tmp/issue-create.log"; cat >"$tmp/created-issue"; echo https://github.com/o/r/issues/99; exit; }
 [[ \$1 == issue && \$2 == view ]] && { show "$tmp/issue-\$3.json" 2>/dev/null || echo '{}'; exit; }
 [[ \$1 == issue && \$2 == list ]] && { cat "$tmp/issues.json" 2>/dev/null || echo '[]'; exit; }
 [[ \$1 == pr && \$2 == view ]] && { show "$tmp/pr-\$3.json"; exit; }
@@ -88,11 +89,13 @@ bg() { echo "{\"name\":\"$1\",\"kind\":\"background\",\"id\":\"$1\"}"; }
 as ac-web-main; want role=main "main name" "$(run role)"
 as ac-web-dark-mode-lead; want role=lead "lead name" "$(run role)"
 as ac-web-dark-mode-verify; want role=helper "helper name" "$(run role)"
+as ac-web-order; want role=order "order session name" "$(run role)"
 as web-app-main; want role=plain "other project name" "$(run role)"
 as ""; want role=plain "no name" "$(run role)"
 as ac-webx-main; want role=plain "longer prefix" "$(run role)"
 
 as ac-web-main; want "Shop role: main" "hook main" "$(echo '{}' | "$shop" hook)"
+as ac-web-order; want "Shop role: order" "hook order" "$(echo '{}' | "$shop" hook)"
 for n in web-app-main ac-web-a-lead ac-web-a-verify; do
   as "$n"; [[ -z $(echo '{}' | "$shop" hook) ]] || { echo "FAIL hook prints nothing for $n"; failed=1; }
 done
@@ -110,6 +113,18 @@ want "already running" "a second main keeps its name" "$(typed '/shop main')"
 [[ $(typed '/shop main') != *sessionTitle* ]] || { echo "FAIL a second main gets no new name"; failed=1; }
 as ac-web-main; want '"sessionTitle": "ac-web-main"' "main can repeat the command" "$(typed '/shop main')"
 agents_are '[]'
+as web-app-main; want '"sessionTitle": "ac-web-order"' "/order names the session" "$(typed '/order')"
+want '"sessionTitle": "ac-web-order"' "/order:order names the session" "$(typed '/order:order')"
+want '"sessionTitle": "ac-web-order"' "/order with a request names the session" "$(typed '/order 匯出報表')"
+for p in '/orders' 'please run /order'; do
+  [[ -z $(typed "$p") ]] || { echo "FAIL prompt hook stays silent for: $p"; failed=1; }
+done
+agents_are "[$(bg ac-web-order)]"
+want "already running" "a second order session keeps its name" "$(typed '/order')"
+agents_are '[]'
+as ac-web-main; want "keeps its name" "/order does not rename main" "$(typed '/order')"
+as ac-web-order; want "keeps its name" "/shop main does not rename the order session" "$(typed '/shop main')"
+want '"sessionTitle": "ac-web-order"' "the order session can repeat the command" "$(typed '/order')"
 
 as plain-name; want "needs a main session" "plain cannot start a lead" "$(run lead fix a g)"
 as ac-web-a-lead; want "needs a main session" "lead cannot start a lead" "$(run lead fix a g)"
@@ -584,6 +599,10 @@ want "under main's account" "in solo mode, main merges each PR" "$(run merge 6 $
 agents_are '[]'
 [[ $(echo '{}' | "$shop" hook) != *"Run the guard"* ]] || { echo "FAIL a solo main with no lead gets no guard reminder"; failed=1; }
 [[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL a solo main with no lead ends a turn with no guard"; failed=1; }
+agents_are '[{"name":"ac-web-order","kind":"interactive"}]'
+[[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL the order session is no work for the guard of a solo main"; failed=1; }
+as ac-web-order; want "needs shared mode" "solo mode submits no order" "$(echo body | run submit report x)"
+as ac-web-main
 agents_are "[$(bg ac-web-a-lead)]"
 want "Run the guard" "a resumed solo main with a lead runs the guard again" "$(echo '{}' | "$shop" hook)"
 agents_are '[]'
@@ -611,15 +630,62 @@ for f in "$(dirname "$shop")"/../templates/workflows/*.yml; do
   yq e . "$f" >/dev/null || { echo "FAIL bad yaml $f"; failed=1; }
 done
 
+# The order session: the same go as main, and submit in place of lead.
+echo '{"prefix":"ac-web","mode":"shared"}' >.claude/shop.json
+as ac-web-order
+want "order slug=report name=週報" "the order session records an order" "$(run order report '週報')"
+want "has not said go for report" "no go, no issue" "$(echo body | run submit report '週報')"
+[[ ! -f $tmp/issue-create.log ]] || { echo "FAIL no go creates no issue"; failed=1; }
+want "submit is open for these orders only" "go in the order session opens submit" "$(typed 'go report')"
+want "https://github.com/o/r/issues/99" "submit prints the issue" "$(printf 'Order: 週報 (report)\n' | run submit report '週報')"
+want "--title 週報" "submit uses the title" "$(cat "$tmp/issue-create.log")"
+[[ $(head -1 "$tmp/created-issue") == '<!-- shop-order -->' ]] || { echo "FAIL submit marks the issue as an order"; failed=1; }
+want "Order: 週報 (report)" "submit sends the order text" "$(cat "$tmp/created-issue")"
+want "has not said go for report" "one go submits once" "$(echo body | run submit report '週報')"
+run order weekly '每週報表' >/dev/null
+want "submit is open" "a plain go opens the order shown after the last go" "$(typed go)"
+want "order text" "submit needs the order text" "$(run submit weekly x </dev/null)"
+want "needs a main session" "the order session cannot start a lead" "$(run lead fix weekly g)"
+as ac-web-main; want "needs the order session" "main cannot submit" "$(echo body | run submit weekly x)"
+as plain-name; want "needs the order session" "a plain session cannot submit" "$(echo body | run submit weekly x)"
+want "needs the main or order session" "a plain session cannot record an order" "$(run order weekly x)"
+
+# With both plugins on, each prompt runs both hooks. Each plugin serves the sessions of its own skill.
+typed_in() { jq -n --arg p "$2" '{prompt: $p}' | "$shop" prompt "$1"; }  # plugin, prompt
+rm -rf .scratch/shop/approved
+as ac-web-order
+[[ -z $(typed_in shop 'go weekly') ]] || { echo "FAIL the shop hook leaves the go of the order session"; failed=1; }
+[[ ! -f .scratch/shop/approved/weekly ]] || { echo "FAIL the shop hook opens no order of the order session"; failed=1; }
+want "submit is open" "the order hook serves the order session" "$(typed_in order 'go weekly')"
+[[ -z $(echo '{}' | "$shop" hook shop) ]] || { echo "FAIL the shop hook leaves the start of the order session"; failed=1; }
+[[ -z $(typed_in shop '/order') ]] || { echo "FAIL the shop hook leaves /order"; failed=1; }
+as ac-web-main
+[[ -z $(typed_in order 'go weekly') ]] || { echo "FAIL the order hook leaves the go of main"; failed=1; }
+[[ -z $(echo '{}' | "$shop" hook order) ]] || { echo "FAIL the order hook leaves the start of main"; failed=1; }
+as plain-name
+[[ -z $(typed_in order '/shop main') ]] || { echo "FAIL the order hook leaves /shop main"; failed=1; }
+want '"sessionTitle": "ac-web-main"' "the shop hook names main" "$(typed_in shop '/shop main')"
+want '"sessionTitle": "ac-web-order"' "the order hook names the order session" "$(typed_in order '/order')"
+[[ $(typed_in order '/order') != *'/rc'* ]] || { echo "FAIL only main gets the remote control reminder"; failed=1; }
+as ac-web-a-lead; want "keeps its name" "/order does not rename a lead" "$(typed '/order')"
+
 cd "$tmp" || exit 1
 [[ -z $(typed '/shop main') ]] || { echo "FAIL /shop main does nothing outside a shop project"; failed=1; }
 want "role=none" "not a repo" "$(run role)"
 [[ -z $(echo '{}' | "$shop" hook) ]] || { echo "FAIL hook outside a repo prints nothing"; failed=1; }
 
-# The order fields are written twice: a plugin cannot read the files of another plugin.
+# The order plugin runs the script of the shop plugin, a link, from the same SessionStart and UserPromptSubmit hooks:
+# a change to one is a change to both. Its hooks.json is a file: the plugin directory refuses a link there.
+plugins=$(dirname "$shop")/../..
+[[ -L $plugins/order/scripts/shop.sh ]] || { echo "FAIL the order plugin links the script of the shop plugin"; failed=1; }
+hooks_of() { jq -r '.hooks | to_entries[] | .key as $k | .value[].hooks[] | "\($k) \(.command) \(.timeout)"' "$plugins/$1/hooks/hooks.json"; }
+[[ $(hooks_of order) == "$(hooks_of shop | sed -nE 's/^((SessionStart|UserPromptSubmit) .*) shop ([0-9]+)$/\1 order \3/p')" ]] ||
+  { echo "FAIL the order plugin has the SessionStart and UserPromptSubmit hooks of the shop plugin"; failed=1; }
+
+# The order fields are written in both skills. This check keeps them the same.
 fields() { sed -n '/^ *Order: <name> (<slug>)$/,/^ *User.s words:/p' "$1" | sed 's/^ *//'; }
-shop_skill=$(dirname "$shop")/../SKILL.md
-order_skill=$(dirname "$shop")/../../order/SKILL.md
+shop_skill=$plugins/shop/SKILL.md
+order_skill=$plugins/order/SKILL.md
 [[ $(fields "$order_skill" | wc -l) -eq 8 && $(fields "$shop_skill") == "$(fields "$order_skill")" ]] || { echo "FAIL shop and order use the same eight order fields"; failed=1; }
 
 [[ $failed == 0 ]] && echo PASS
