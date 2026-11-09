@@ -46,6 +46,7 @@ STALL_MIN=${STALL_MIN:-30}      # minutes with nothing happening; the tests set 
 GUARD_POLL=${GUARD_POLL:-120}   # seconds
 MERGE_POLL=${MERGE_POLL:-5}     # seconds between two checks of a shop merge run
 MERGE_WAIT=${MERGE_WAIT:-540}   # seconds: under the Bash timeout of 10 minutes that SKILL.md gives merge
+PROC=${PROC:-/proc}             # the tests set it
 
 # One tab-separated line per session of this shop. An empty value is "-": read skips an empty field.
 shop_rows() {
@@ -57,9 +58,14 @@ shop_rows() {
 # ponytail: finds them by Claude Code's shell snapshot in the command line. If that changes, a long test looks quiet,
 # and main gets a false alarm, not a missed one.
 command_dirs() {
-  local pids
-  pids=$(pgrep -f shell-snapshots | paste -sd, -)
-  [[ -n $pids ]] && lsof -a -p "$pids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  local pids p
+  pids=$(pgrep -f shell-snapshots) || return 0
+  # Linux has /proc, and often no lsof. macOS has lsof, and no /proc.
+  if [[ -d $PROC ]]; then
+    for p in $pids; do readlink "$PROC/$p/cwd" 2>/dev/null; done
+  else
+    lsof -a -p "${pids//$'\n'/,}" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  fi
 }
 
 # When a session last did anything, in epoch seconds: its last status change, or the last write of a subagent, which
@@ -71,7 +77,7 @@ last_active() {  # pid, session id, directory
   [[ -n $since ]] || return 0
   sub=$(ls -t "$HOME/.claude/projects/${3//[^a-zA-Z0-9]/-}/$2/subagents"/*.jsonl 2>/dev/null | head -1)
   if [[ -n $sub ]]; then
-    t=$(stat -f %m "$sub" 2>/dev/null || stat -c %Y "$sub")
+    t=$(date -r "$sub" +%s)  # the same on BSD and GNU: stat is not
     ((t > since)) && since=$t
   fi
   echo "$since"

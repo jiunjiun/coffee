@@ -174,9 +174,9 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
 - **The pstack plugin.** Each lead starts with `/poteto-mode` from [pstack](https://github.com/cursor/plugins/tree/main/pstack), a set of engineering skills by another author. It makes the lead apply strict engineering rules while it plans, builds, and verifies. Install it before you use this skill. See [Install](#install).
 - **A Claude Max plan of $100 per month or higher.** The $200 per month plan works best. With the default limits, up to 9 sessions run at the same time (3 leads, each with 2 helpers), and the CI reviews use the same account.
 - **Auto mode.** Background sessions start with `--permission-mode auto`. Your account must allow it.
-- **Tools:** bash, git, `gh` (signed in), jq, python3, curl, lsof, pgrep. The tests also need yq. `/shop commit` scans for secrets with [gitleaks](https://github.com/gitleaks/gitleaks) when it is installed.
+- **Tools:** bash, git, `gh` (signed in), jq, python3, curl, pgrep, and on macOS lsof. The tests also need yq. `/shop commit` scans for secrets with [gitleaks](https://github.com/gitleaks/gitleaks) when it is installed.
 - **A GitHub repository** with a remote named `origin`.
-- Tested on macOS. Linux is expected to work, but it was not tested.
+- Tested on macOS. On Linux, one end-to-end run passed.
 
 ## Install
 

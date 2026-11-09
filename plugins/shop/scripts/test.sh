@@ -367,6 +367,11 @@ job=$!
 for try in 1 2 3 4 5 6 7 8 9 10; do [[ -n $(pgrep -f '# shell-snapshots') ]] && break; sleep 0.1; done
 [[ -z $(run stalled) ]] || { echo "FAIL a running command is no stall"; failed=1; }
 want "command running" "status shows a running command" "$(run status)"
+mkdir -p "$tmp/proc/$job" "$tmp/nolsof"
+ln -s "$quiet_dir" "$tmp/proc/$job/cwd"
+printf '#!/bin/bash\nexit 127\n' >"$tmp/nolsof/lsof"
+chmod +x "$tmp/nolsof/lsof"
+[[ -z $(PROC=$tmp/proc PATH="$tmp/nolsof:$PATH" run stalled) ]] || { echo "FAIL Linux with no lsof sees a running command in /proc"; failed=1; }
 kill "$job"; wait "$job" 2>/dev/null
 want "STALLED ac-web-q-lead" "the command ended: a stall" "$(run stalled)"
 idle_for 2800
