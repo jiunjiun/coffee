@@ -5,6 +5,9 @@
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shop.sh\" prompt order", "timeout": 5 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write|NotebookEdit", "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/shop.sh\" edit", "timeout": 5 }] }
     ]
   }
 }

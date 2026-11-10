@@ -2,7 +2,6 @@
 name: order
 description: Discuss a request with the user, then submit it as one complete order, a GitHub issue that the shop main session of this repository reviews and builds. Use only when the user types /order.
 disable-model-invocation: true
-disallowed-tools: Edit, Write, NotebookEdit
 ---
 
 # Order

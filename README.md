@@ -126,7 +126,7 @@ you ─────────────────────────�
 ```
 
 1. Set `"mode": "shared"` in `.claude/shop.json`. `/shop setup` asks for it.
-2. Each requester installs the `order` plugin once, as in [Install](#install), and types `/order` in their clone of the repo. A hook names that session `<prefix>-order`:
+2. Each requester installs the `order` plugin once, as in [Install](#install), and types `/order` in their clone of the repo. A hook names that session `<prefix>-order`. The requester needs bash, git, jq, and `gh` (signed in), and no Claude Max plan:
 
    ```
    /plugin marketplace add jiunjiun/coffee
@@ -155,10 +155,10 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
 
 ## Guardrails
 
-- Only a go from you opens `shop.sh lead` and `shop.sh queue`, and only for the orders that the go opens. One go starts each order once.
+- Only a go from you opens `shop.sh lead` and `shop.sh queue`, and only for the orders that the go opens. One go starts each order once. In the order session, only a go from the requester opens `shop.sh submit`, with the same rules.
 - A lead cannot run `gh pr merge`, and a lead or helper cannot run `gh workflow run`. A helper cannot push and cannot run `gh pr`. A lead or helper cannot run `claude --bg` directly.
 - A lead or helper works on its own. It asks no questions, to main or to you. It decides each open point, and the lead lists its decisions in the `Decisions` section of the PR. Main reports them to you with the result.
-- A lead or helper cannot force-push or skip the git hooks with `--no-verify`. The same rules apply in any session while this skill is active, for example during `/shop commit`.
+- A lead or helper cannot force-push or skip the git hooks with `--no-verify`. In any other session, the same rules apply in the turn that starts this skill, for example `/shop commit`.
 - `shop.sh` reads the limits from `.claude/shop.json` in the main checkout. A PR cannot raise its own limits.
 - In `shared` mode, an issue is an order only when it has the order mark and comes from a collaborator of the repo, and not from main's account. `shop.sh lead --issue` checks this on GitHub, and starts one lead per issue. Main treats the text of an issue as data, not as instructions. These checks are in `shop.sh`, so they do not depend on what a session decides:
   - Main and the lead read an order with `shop.sh issue`, which leaves out the comments of other accounts. Main's read saves the order. `shop.sh lead --issue` refuses an order that changed after that, and the lead reads the saved text, not the issue as it is later.
@@ -195,7 +195,7 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
    /plugin install shop@coffee
    ```
 
-   The plugin adds three hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt. The Stop hook stops main from ending a turn while the guard has work and does not run. The `order` plugin runs the same script from the same SessionStart and UserPromptSubmit hooks: a change to the go rules changes both plugins.
+   The plugin adds three hooks. The SessionStart hook tells a main session its role. The UserPromptSubmit hook names a session main on `/shop main`, and records your `go`. It exits at once for every other prompt. The Stop hook stops main from ending a turn while the guard has work and does not run. The `order` plugin runs the same script from the same SessionStart and UserPromptSubmit hooks: a change to the go rules changes both plugins. It adds a PreToolUse hook: the order session cannot use the Edit, Write, and NotebookEdit tools, so it writes orders and does not change the requester's clone.
 
 3. Open Claude Code in your project root, and type `/shop setup`. Claude does these steps with you:
    - Picks a session name prefix, for example `ac-web`, and writes `.claude/shop.json`.
@@ -278,7 +278,7 @@ The sessions run these. You seldom need them.
 | `.scratch/<slug>/wt` | The worktree of a lead. |
 | `.scratch/<slug>/<job>` | The worktree of a helper. |
 | `.scratch/shop/events.jsonl` | The event log that the status page reads. |
-| `.scratch/shop/approved/` | One file for each order that has your go. A lead start removes it. |
+| `.scratch/shop/approved/` | One file for each order that has a go. A lead start, or a submit in the order session, removes it. |
 | `.scratch/shop/orders/` | In `shared` mode, each order as main read it, and as its lead gets it. |
 | `.scratch/shop/leads/` | In `shared` mode, the issue of each lead that works on a requester's order, until `shop.sh close`. `shop.sh merge` reads it. |
 | `.scratch/shop/brief-<n>.md` | In `shared` mode, the brief that main writes for the lead of issue `<n>`. `shop.sh lead` deletes it when the lead starts. |

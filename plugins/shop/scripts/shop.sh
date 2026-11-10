@@ -3,10 +3,12 @@
 # Usage: shop.sh role | hook | prompt | status | stalled | guard | watch | web | lead [--issue <n>] <type> <slug> <goal> [brief]
 #        | helper <job> [goal] | close [--discard] <session name> | note <text> | issue <n> | feedback <pr> | order <slug> <name> | ready <pr> | merge <pr> <sha>
 #        | queue [--issue <n>] <slug> <goal> | hold <resource> <slug|free> | ci [install] | token | submit <slug> <title>
+#        | edit
 # The session name is the switch: only <prefix>-main starts leads, only a lead starts helpers, and only <prefix>-order
 # submits orders as issues. The order plugin links this file, and runs it from its SessionStart and UserPromptSubmit
 # hooks: both plugins run the same go.
-# hook, prompt, and stop are Claude Code hooks: SessionStart, UserPromptSubmit, and Stop.
+# hook, prompt, and stop are Claude Code hooks: SessionStart, UserPromptSubmit, and Stop. edit is the PreToolUse hook
+# of the order plugin.
 set -u
 
 die() { echo "shop: $1" >&2; exit 1; }
@@ -28,8 +30,9 @@ load() {
     "$prefix-main") role=main ;;
     "$prefix-order") role=order ;;
     "$prefix"-*-lead) role=lead ;;
-    "$prefix"-*) role=helper ;;
-    *) role=plain ;;
+    # A helper is <prefix>-<slug>-<job>, and a job starts with a letter. Claude Code names a new session <folder>-<n>:
+    # in a folder whose name starts with the prefix, that session is plain.
+    *) [[ $name =~ ^"$prefix"-.+-[a-z][a-z0-9]*$ ]] && role=helper || role=plain ;;
   esac
 }
 
@@ -38,13 +41,13 @@ limit() { jq -r --arg k "$1" --argjson d "$2" '.[$k] // $d' "$conf"; }
 agents() { claude agents --json 2>/dev/null; }
 count() { agents | jq --arg re "$1" '[.[] | select((.name // "") | test($re))] | length'; }
 names() { agents | jq -r --arg re "$1" '.[] | select((.name // "") | test($re)) | .name'; }
-helpers_re() { echo "^$1-(?!lead\$)[a-z0-9]+\$"; }
+helpers_re() { echo "^$1-(?!lead\$)[a-z][a-z0-9]*\$"; }
 # One guard per main process. After a resume, the guard of the old process wakes no one: it ends after its sleep.
 guard_pidfile() { echo "$scratch/guard-${CLAUDE_PID:-}.pid"; }
 guard_runs() { kill -0 "$(cat "$(guard_pidfile)" 2>/dev/null)" 2>/dev/null; }
 # In shared mode, orders come as GitHub issues, so the guard has work also with no session. The order session is not
 # work for the guard.
-guard_has_work() { [[ $mode == shared || $(count "^$prefix-(?!(main|order)\$)") -gt 0 ]]; }
+guard_has_work() { [[ $mode == shared || $(count "^$prefix-.+-[a-z][a-z0-9]*\$") -gt 0 ]]; }
 
 STALL_MIN=${STALL_MIN:-30}      # minutes with nothing happening; the tests set it
 GUARD_POLL=${GUARD_POLL:-120}   # seconds
@@ -305,7 +308,7 @@ $brief" 'Bash(gh pr merge:*)'; then
 cmd_helper() {
   local job=${1:-} goal=${2:-}
   need lead
-  [[ $job =~ ^[a-z0-9]+$ && $job != lead && $job != main ]] || die "job must be one lowercase word, for example research or verify."
+  [[ $job =~ ^[a-z][a-z0-9]*$ && $job != lead && $job != main ]] || die "job must be one lowercase word, for example research or verify."
   local base=${name%-lead} max running
   local session=$base-$job wt=$main_root/.scratch/${base#"$prefix"-}/$job
   max=$(limit max_helpers 2)
@@ -654,7 +657,8 @@ cmd_hook() {
   cat >/dev/null
   serves "$role" || exit 0
   case $role in
-    order) text="Shop role: order. This session is $name. Load the order skill before you act on a request." ;;
+    # Only the user can load the order skill: it has disable-model-invocation.
+    order) text="Shop role: order. This session is $name. Follow the order skill. When its text is not in this conversation, ask the user to type /order: you cannot load it yourself." ;;
     main)
       text="Shop role: main. This session is $name. Load the shop skill before you act on a request that changes code."
       # SessionStart runs on start, resume, and compact. A resume starts a new process, and the old guard ends with the
@@ -676,6 +680,14 @@ cmd_stop() {
   [[ $role == main ]] && ! guard_runs || exit 0
   jq -e '.stop_hook_active != true' >/dev/null <<<"$input" && guard_has_work || exit 0
   jq -n '{decision: "block", reason: "The shop guard does not run. Run shop.sh guard (the T of the shop skill) with run_in_background, then end the turn."}'
+}
+
+# The order session writes orders, and does not change the requester's clone. The disallowed-tools of a skill end with
+# the turn that starts it, so this hook refuses the edit tools for the whole session.
+# ponytail: Bash can still write a file. This stops a mistake, not a session that means harm.
+cmd_edit() {
+  [[ $role == order ]] || exit 0
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "The order session does not change the repository. Put the change in an order: the shop builds it."}}'
 }
 
 # The issue of an order, for main and a lead. Main's read is the review: it saves the order text for gate. The lead of
@@ -778,6 +790,12 @@ cmd_prompt() {
   jq -n --arg t "$text" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $t}}'
 }
 
+# Runs on every edit tool call in every session, so leave before git and jq unless the session can be the order session.
+if [[ ${1:-} == edit ]]; then
+  cat >/dev/null
+  s=; read -r -d '' s <"$HOME/.claude/sessions/${CLAUDE_PID:-none}.json" 2>/dev/null
+  [[ $s == *'-order"'* ]] || exit 0
+fi
 # Runs on every prompt, so leave before git and jq unless the prompt can match.
 if [[ ${1:-} == prompt ]]; then
   input=$(cat)
@@ -793,6 +811,7 @@ case $cmd in
   hook) plugin=${1:-}; cmd_hook ;;
   prompt) plugin=${1:-}; cmd_prompt "$input" ;;
   stop) cmd_stop ;;
+  edit) cmd_edit ;;
   status) cmd_status ;;
   stalled) cmd_stalled ;;
   guard) cmd_guard ;;

@@ -22,7 +22,7 @@ Run `T role`, then follow the first line that matches:
 
 - The user said `/shop commit`: read [references/commit.md](references/commit.md) and do it, in any role.
 - The user said `/shop setup`: read [references/setup.md](references/setup.md) and do it.
-- The user said `/shop main`: a hook has named the session. Report the role and the Remote Control state from `T role`. Only the user can turn Remote Control on: `/rc`. If the hook said that main is already running, tell the user the name of that session. When `T role` says `mode=shared`, run `T guard` with `run_in_background` now: it watches GitHub issues for orders from requesters. Then wait for the user's request.
+- The user said `/shop main`: a hook has named the session. If the hook said that this session keeps its name, or that main is already running, tell the user what it said, then stop. Else report the role and the Remote Control state from `T role`. Only the user can turn Remote Control on: `/rc`. When `T role` says `mode=shared`, run `T guard` with `run_in_background` now: it watches GitHub issues for orders from requesters. Then wait for the user's request.
 - The user said `/shop watch` or `/shop web`: run `T web`. It starts the status page and opens it in the browser. Give the user the address that it prints.
 - `role=none`: tell the user to run `/shop setup`, then stop.
 - `role=order`: follow the order skill.

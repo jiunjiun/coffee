@@ -87,6 +87,9 @@ agents_are() { echo "$1" >"$tmp/agents.json"; }
 bg() { echo "{\"name\":\"$1\",\"kind\":\"background\",\"id\":\"$1\"}"; }
 
 as ac-web-main; want role=main "main name" "$(run role)"
+as ac-web-73; want role=plain "a default session name in a folder named as the prefix" "$(run role)"
+as ac-web-review-1; want role=plain "a default session name in a folder named prefix-x" "$(run role)"
+as ac-web-dark-mode-1; want role=plain "a default session name in a folder named prefix-x-y" "$(run role)"
 as ac-web-dark-mode-lead; want role=lead "lead name" "$(run role)"
 as ac-web-dark-mode-verify; want role=helper "helper name" "$(run role)"
 as ac-web-order; want role=order "order session name" "$(run role)"
@@ -210,7 +213,8 @@ want "Kept fix/later: its work is not merged" "close keeps an unmerged branch" "
 [[ -n $(git branch --list fix/later) ]] || { echo "FAIL close keeps an unmerged branch"; failed=1; }
 run lead fix second g >/dev/null
 want ", fix/second" "close removes a branch with no commit of its own" "$(run close ac-web-second-lead)"
-agents_are "[$(bg ac-web-dark-mode-lead)]"
+# ac-web-dark-mode-1 is a default session name, not a helper: it does not count toward the limit.
+agents_are "[$(bg ac-web-dark-mode-lead),{\"name\":\"ac-web-dark-mode-1\",\"kind\":\"interactive\"}]"
 cd .scratch/dark-mode/wt || exit 1
 echo '{"prefix":"ac-web","max_helpers":9}' >.claude/shop.json
 as ac-web-dark-mode-lead; want "session=ac-web-dark-mode-verify" "start helper" "$(run helper verify)"
@@ -225,6 +229,7 @@ want "Bash(claude --bg:*)" "helper cannot call claude --bg" "$(cat "$tmp/spawn.l
 agents_are "[$(bg ac-web-dark-mode-lead),$(bg ac-web-dark-mode-verify)]"
 echo '{"prefix":"ac-web","max_helpers":9}' >.claude/shop.json
 want "1 of 1 helpers" "a worktree copy cannot raise the limit" "$(run helper research)"
+want "job must be" "a job starts with a letter, so it cannot look like a default session name" "$(run helper 2)"
 git checkout -q .claude/shop.json
 want "closes only its own" "lead cannot close another helper" "$(run close ac-web-other-verify)"
 want "closes only its own" "lead cannot close itself" "$(run close ac-web-dark-mode-lead)"
@@ -601,6 +606,8 @@ agents_are '[]'
 [[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL a solo main with no lead ends a turn with no guard"; failed=1; }
 agents_are '[{"name":"ac-web-order","kind":"interactive"}]'
 [[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL the order session is no work for the guard of a solo main"; failed=1; }
+agents_are '[{"name":"ac-web-73","kind":"interactive"}]'
+[[ -z $(echo '{}' | "$shop" stop) ]] || { echo "FAIL a default session name is no work for the guard of a solo main"; failed=1; }
 as ac-web-order; want "needs shared mode" "solo mode submits no order" "$(echo body | run submit report x)"
 as ac-web-main
 agents_are "[$(bg ac-web-a-lead)]"
@@ -669,6 +676,11 @@ want '"sessionTitle": "ac-web-order"' "the order hook names the order session" "
 [[ $(typed_in order '/order') != *'/rc'* ]] || { echo "FAIL only main gets the remote control reminder"; failed=1; }
 as ac-web-a-lead; want "keeps its name" "/order does not rename a lead" "$(typed '/order')"
 
+# The order plugin refuses the edit tools in the order session, and only there.
+as ac-web-order; want '"permissionDecision": "deny"' "the order session cannot edit files" "$(echo '{}' | "$shop" edit)"
+as ac-web-main; [[ -z $(echo '{}' | "$shop" edit) ]] || { echo "FAIL the edit hook leaves main"; failed=1; }
+as ac-web-x-order; [[ -z $(echo '{}' | "$shop" edit) ]] || { echo "FAIL the edit hook leaves a helper whose job is order"; failed=1; }
+
 cd "$tmp" || exit 1
 [[ -z $(typed '/shop main') ]] || { echo "FAIL /shop main does nothing outside a shop project"; failed=1; }
 want "role=none" "not a repo" "$(run role)"
@@ -678,8 +690,9 @@ want "role=none" "not a repo" "$(run role)"
 # a change to one is a change to both. Its hooks.json is a file: the plugin directory refuses a link there.
 plugins=$(dirname "$shop")/../..
 [[ -L $plugins/order/scripts/shop.sh ]] || { echo "FAIL the order plugin links the script of the shop plugin"; failed=1; }
+want 'Edit|Write|NotebookEdit' "the order plugin has the edit hook" "$(jq -r '.hooks.PreToolUse[].matcher' "$plugins/order/hooks/hooks.json")"
 hooks_of() { jq -r '.hooks | to_entries[] | .key as $k | .value[].hooks[] | "\($k) \(.command) \(.timeout)"' "$plugins/$1/hooks/hooks.json"; }
-[[ $(hooks_of order) == "$(hooks_of shop | sed -nE 's/^((SessionStart|UserPromptSubmit) .*) shop ([0-9]+)$/\1 order \3/p')" ]] ||
+[[ $(hooks_of order | grep -E '^(SessionStart|UserPromptSubmit) ') == "$(hooks_of shop | sed -nE 's/^((SessionStart|UserPromptSubmit) .*) shop ([0-9]+)$/\1 order \3/p')" ]] ||
   { echo "FAIL the order plugin has the SessionStart and UserPromptSubmit hooks of the shop plugin"; failed=1; }
 
 # The order fields are written in both skills. This check keeps them the same.
