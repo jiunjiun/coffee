@@ -93,6 +93,10 @@ agents_are() { echo "$1" >"$tmp/agents.json"; }
 bg() { echo "{\"name\":\"$1\",\"kind\":\"background\",\"id\":\"$1\"}"; }
 
 as ac-web-main; want role=main "main name" "$(run role)"
+mkdir "$tmp/nojq" && for t in git dirname cat; do ln -s "$(command -v "$t")" "$tmp/nojq/$t"; done  # git, and no jq
+want "jq is missing" "a command says that jq is missing" "$(PATH=$tmp/nojq "$shop" role 2>&1)"
+out=$(echo '{}' | PATH=$tmp/nojq "$shop" stop 2>/dev/null) && [[ -z $out ]] || { echo "FAIL a hook stays silent with no jq"; failed=1; }
+as ac-web-order; want '"permissionDecision": "deny"' "the order session cannot edit files with no jq" "$(echo '{}' | PATH=$tmp/nojq "$shop" edit)"
 as ac-web-73; want role=plain "a default session name in a folder named as the prefix" "$(run role)"
 as ac-web-review-1; want role=plain "a default session name in a folder named prefix-x" "$(run role)"
 as ac-web-dark-mode-1; want role=plain "a default session name in a folder named prefix-x-y" "$(run role)"
@@ -125,7 +129,7 @@ agents_are '[]'
 as web-app-main; want '"sessionTitle": "ac-web-order"' "/order names the session" "$(typed '/order')"
 want '"sessionTitle": "ac-web-order"' "/order:order names the session" "$(typed '/order:order')"
 want '"sessionTitle": "ac-web-order"' "/order with a request names the session" "$(typed '/order 匯出報表')"
-for p in '/orders' 'please run /order'; do
+for p in '/orders' 'please run /order' '/order setup' '/order:order setup'; do
   [[ -z $(typed "$p") ]] || { echo "FAIL prompt hook stays silent for: $p"; failed=1; }
 done
 agents_are "[$(bg ac-web-order)]"
@@ -458,8 +462,9 @@ guard_once() { CLAUDE_PID=$main_pid GUARD_POLL=0.05 "$shop" guard; }  # one roun
 new_main
 mark='<!-- shop-order -->'
 issue() {  # number, author, state, body, state reason: writes what gh issue view and gh issue list return
-  jq -n --argjson n "$1" --arg a "$2" --arg s "$3" --arg b "$4" --arg r "${5:-}" \
-    '{number: $n, title: "Order \($n)", author: {login: $a}, state: $s, stateReason: $r, body: $b, comments: [], closedAt: (if $s == "CLOSED" then now else null end)}' >"$tmp/issue-$1.json"
+  closes=$((${closes:-0} + 1))  # each close has its own time: two in the same second are two closes
+  jq -n --argjson n "$1" --arg a "$2" --arg s "$3" --arg b "$4" --arg r "${5:-}" --arg at "t$closes" \
+    '{number: $n, title: "Order \($n)", author: {login: $a}, state: $s, stateReason: $r, body: $b, comments: [], closedAt: (if $s == "CLOSED" then $at else null end)}' >"$tmp/issue-$1.json"
   jq -s '[.[] | select(.state == "OPEN")]' "$tmp"/issue-*.json >"$tmp/issues.json"
 }
 printf 'amy\nowner\n' >"$tmp/collaborators"  # main's account is a collaborator too
@@ -580,7 +585,13 @@ want "close --discard ac-web-issue-csv-lead: it also closes the PR" "a cancel na
 [[ ! -e .scratch/shop/working/issue-csv ]] || { echo "FAIL guard reports a cancel once"; failed=1; }
 echo 17 >.scratch/shop/working/issue-done
 issue 17 amy CLOSED "$mark" COMPLETED
+echo 'github-actions[bot]' >"$tmp/closed-by-17"
 [[ $(guard_once) != *CANCELLED* ]] || { echo "FAIL a merge is no cancel"; failed=1; }
+echo 17 >.scratch/shop/working/issue-done; rm "$tmp/closed-by-17"
+want "CANCELLED #17" "the requester cancels with the close button of GitHub, which closes as completed" "$(guard_once)"
+echo 17 >.scratch/shop/working/issue-done; echo owner >"$tmp/closed-by-17"
+[[ $(guard_once) != *CANCELLED* ]] || { echo "FAIL main's account closes a merged order as completed"; failed=1; }
+echo 17 >.scratch/shop/working/issue-done; echo 'github-actions[bot]' >"$tmp/closed-by-17"; guard_once >/dev/null
 [[ ! -e .scratch/shop/working/issue-done ]] || { echo "FAIL guard stops watching a closed issue"; failed=1; }
 echo 16 >.scratch/shop/working/issue-csv
 git -C .scratch/issue-csv/wt commit -q --allow-empty -m draft

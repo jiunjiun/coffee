@@ -21,6 +21,7 @@ Run once per project, in the project root.
    In `shared` mode, add `"mode": "shared"`.
 
 8. Check these, and report each one that fails:
+   - The tools are there: in one command, `for t in bash git gh jq python3 curl pgrep; do command -v "$t" >/dev/null || echo "missing $t"; done`, and on macOS also for lsof. For each tool that is missing, give the user the install command for their system, for example `brew install gh jq`. Install it only when the user says so. gitleaks is optional: `/shop commit` scans for secrets with it.
    - `gh auth status` passes, and the repo has a remote.
    - `git symbolic-ref refs/remotes/origin/HEAD` passes: a lead starts from that branch. If it fails, run `git remote set-head origin --auto`.
    - `.scratch/` is git-ignored: `git check-ignore .scratch/x`.
@@ -48,4 +49,4 @@ Run once per project, in the project root.
      ```
 
    - Write another rule only when the user says that the owner merges some PRs. Name those PRs.
-12. Tell the user how to start: type `/shop main` in any session of this project, or run `claude -n <prefix>-main`. In `shared` mode, the requesters can send orders now: main picks up each open order when it starts.
+12. Tell the user how to start: type `/shop main` in any session of this project, or run `claude -n <prefix>-main`. In `shared` mode, the requesters can send orders now: main picks up each open order when it starts. Each requester installs the `order` plugin, and types `/order setup` once: it checks their tools and their access.

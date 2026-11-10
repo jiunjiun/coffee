@@ -10,8 +10,11 @@ disable-model-invocation: true
 
 ## Start
 
-The user typed `/order`: a hook has named the session. Run `T role`, then follow the first line that matches:
+Follow the first line that matches:
 
+- The user typed `/order setup`: read [references/setup.md](references/setup.md) and do it. The rules below do not apply.
+- The user typed `/order`: a hook has named the session. Run `T role`, then follow the first line below that matches.
+- `T role` fails, for example because jq is missing: tell the user to type `/order setup`. Then stop.
 - The hook said that this session keeps its name, or that the order session is already running: tell the user what it said, then stop.
 - `role=none`: tell the user that this repository has no shop, because `.claude/shop.json` is missing. Then stop.
 - `mode=solo`: tell the user that this shop takes no orders from requesters, because its mode is solo. Then stop.
@@ -69,4 +72,4 @@ User's words: <the key words of the user, quoted>
 3. Give the user the issue URL, and tell the user:
    - The shop main session reviews the order. When something is missing, main comments on the issue and closes it. Fix the order here, and submit a new one.
    - The PR closes the issue when it merges, and GitHub sends a notification.
-   - To cancel the order: `gh issue close <n> --reason "not planned"`.
+   - To cancel the order, tell this session: it runs `gh issue close <n> --reason "not planned"`. The close button on the GitHub page also cancels it.

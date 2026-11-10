@@ -203,7 +203,9 @@ issue_events() {
       }
       continue
     fi
-    [[ $reason == completed ]] || echo "CANCELLED #$n: its issue is closed ($reason). Run shop.sh close --discard $prefix-$slug-lead: it also closes the PR."
+    # The button on the GitHub page closes an issue as completed. From the requester, that is a cancel too: only the
+    # merge workflow, or main after a merge, closes a finished order.
+    [[ $reason == completed && $by != "$author" ]] || echo "CANCELLED #$n: its issue is closed ($reason). Run shop.sh close --discard $prefix-$slug-lead: it also closes the PR."
     rm -f "$scratch/working/$slug" "$scratch/closed/$slug"
   done
 }
@@ -774,7 +776,8 @@ cmd_prompt() {
   [[ -n $prefix ]] || exit 0
   said=$(jq -r .prompt <<<"$input")
   [[ $said =~ ^/(shop:)?shop\ main$ ]] && named=main
-  [[ $said =~ ^/(order:)?order([[:space:]]|$) ]] && named=order
+  # /order setup checks the tools of a requester. It is not an order session.
+  [[ $said =~ ^/(order:)?order([[:space:]]|$) && ! $said =~ ^/(order:)?order[[:space:]]+setup[[:space:]]*$ ]] && named=order
   if [[ -n $named ]]; then
     serves "$named" || exit 0
     keep_name "$prefix-$named"
@@ -809,6 +812,11 @@ if [[ ${1:-} == edit ]]; then
   cat >/dev/null
   s=; read -r -d '' s <"$HOME/.claude/sessions/${CLAUDE_PID:-none}.json" 2>/dev/null
   [[ $s == *'-order"'* ]] || exit 0
+  # With no jq, load sees no role and the edit passes. Refuse it: this session can be the order session.
+  command -v jq >/dev/null || {
+    echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "jq is missing, so the shop cannot confirm the role of this session. Type /order setup: it checks the tools."}}'
+    exit 0
+  }
 fi
 # Runs on every prompt, so leave before git and jq unless the prompt can match.
 if [[ ${1:-} == prompt ]]; then
@@ -817,6 +825,10 @@ if [[ ${1:-} == prompt ]]; then
   [[ $input == *'shop main'* || $input == *'"/order'* || $input =~ $has_go ]] || exit 0
 fi
 
+# load hides the error of a missing jq, and then each session looks plain. A hook stays silent: it runs in each session.
+# The edit hook refuses above instead.
+[[ ${1:-} =~ ^(hook|prompt|stop|edit)$ ]] || command -v jq >/dev/null ||
+  die "jq is missing. Type /shop setup, or /order setup in a session of a requester: it checks the tools."
 load
 cmd=${1:-}
 [[ $# -gt 0 ]] && shift
