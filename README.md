@@ -2,6 +2,8 @@
 
 Claude Code plugins. Say what you want, say go, and take a coffee break while the agents do the work.
 
+For a visual guide to how an order runs, in English and 繁體中文, see the [coffee order flow page](https://claude.ai/artifact/VAnZnEiKqpdeziQvB6Sh3v).
+
 ## shop
 
 `shop` is a Claude Code plugin that runs your features through a team of Claude sessions. You talk to one session. It starts other sessions in the background. Each feature gets its own git worktree, its own branch, and its own pull request.
