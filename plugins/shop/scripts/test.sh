@@ -49,6 +49,12 @@ flag=\${*: -2:1} filter=\${*: -1}
   esac
   exit
 }
+[[ \$1 == api && \$2 == */issues/[0-9]* ]] && {  # the REST issue, as issue_events reads it. Who closed it: closed-by-<n>, or the author
+  [[ -f $tmp/gh-down ]] && { echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1; }
+  n=\${2##*/}
+  jq -r --arg by "\$(cat "$tmp/closed-by-\$n" 2>/dev/null)" '"\(.state | ascii_downcase) \(if (.stateReason // "") == "" then "-" else .stateReason | ascii_downcase end) \(if \$by == "" then .author.login else \$by end) \(.author.login) \(.closedAt // "-")"' "$tmp/issue-\$n.json" 2>/dev/null
+  exit
+}
 [[ \$1 == api && \$2 == --paginate ]] && {  # api-<path with - for />.json
   p=\${3#repos/\{owner\}/\{repo\}/}
   [[ -f $tmp/api-\${p//\//-}.json ]] && show "$tmp/api-\${p//\//-}.json"
@@ -453,7 +459,7 @@ new_main
 mark='<!-- shop-order -->'
 issue() {  # number, author, state, body, state reason: writes what gh issue view and gh issue list return
   jq -n --argjson n "$1" --arg a "$2" --arg s "$3" --arg b "$4" --arg r "${5:-}" \
-    '{number: $n, title: "Order \($n)", author: {login: $a}, state: $s, stateReason: $r, body: $b, comments: []}' >"$tmp/issue-$1.json"
+    '{number: $n, title: "Order \($n)", author: {login: $a}, state: $s, stateReason: $r, body: $b, comments: [], closedAt: (if $s == "CLOSED" then now else null end)}' >"$tmp/issue-$1.json"
   jq -s '[.[] | select(.state == "OPEN")]' "$tmp"/issue-*.json >"$tmp/issues.json"
 }
 printf 'amy\nowner\n' >"$tmp/collaborators"  # main's account is a collaborator too
@@ -546,6 +552,28 @@ want "@mallory: 1 not shown" "feedback counts the comments of a stranger" "$out"
 [[ $out == *"review summary"*"null check"*"fixed in"* ]] || { echo "FAIL feedback is in time order: $out"; failed=1; }
 as plain-name; want "needs a main or lead" "plain cannot read feedback" "$(run feedback 7)"; as ac-web-main
 issue 15 amy CLOSED "$mark" NOT_PLANNED
+# Another collaborator closes amy's order: main asks the user, once, and the order is no cancel.
+echo bob >"$tmp/closed-by-15"
+out=$(guard_once)
+want "CLOSED #15 by @bob, who is not its requester @amy" "guard reports a close by another account" "$out"
+[[ $out != *CANCELLED* ]] || { echo "FAIL a close by another account is no cancel"; failed=1; }
+[[ -z $(guard_once) ]] || { echo "FAIL guard reports a close by another account once"; failed=1; }
+issue 15 amy OPEN "$mark"; guard_once >/dev/null; issue 15 amy CLOSED "$mark" NOT_PLANNED
+want "CLOSED #15 by @bob" "guard reports the next close after the issue opens again" "$(guard_once)"
+echo owner >"$tmp/closed-by-15"
+want "CANCELLED #15" "main's account cancels the order of a requester" "$(guard_once)"
+echo 15 >.scratch/shop/working/issue-csv
+echo 'github-actions[bot]' >"$tmp/closed-by-15"
+want "CLOSED #15 by @github-actions[bot]" "another workflow, for example a stale bot, that closes an order is no cancel" "$(guard_once)"
+issue 15 amy CLOSED "$mark" COMPLETED
+[[ -z $(guard_once) && ! -e .scratch/shop/working/issue-csv ]] || { echo "FAIL the merge workflow closes an order with no question"; failed=1; }
+echo bob >"$tmp/closed-by-15"; echo 15 >.scratch/shop/working/issue-csv
+want "CLOSED #15 by @bob" "another account that closes an order as completed is no merge" "$(guard_once)"
+issue 15 amy CLOSED "$mark" NOT_PLANNED
+echo 15 >.scratch/shop/working/issue-csv
+touch "$tmp/gh-down"; guard_once >/dev/null; rm "$tmp/gh-down"
+[[ -e .scratch/shop/working/issue-csv ]] || { echo "FAIL guard keeps the watch when GitHub does not answer"; failed=1; }
+rm "$tmp/closed-by-15"
 out=$(guard_once)
 want "CANCELLED #15" "guard reports a cancel" "$out"
 want "close --discard ac-web-issue-csv-lead: it also closes the PR" "a cancel names the lead and the way to close it" "$out"

@@ -138,7 +138,7 @@ you ─────────────────────────�
 5. Main reviews only what the requester's session cannot see. It looks for a missing field, a thing that only you can do, a thing outside the repo, a change to CI, or a conflict with running work. It asks you when in doubt. For a missing field, main comments on the issue and closes it, and the requester submits a new one.
 6. An order that passes starts with no go from you. The lead gets the order as main reviewed it: an edit of the issue after main read it stops the start, and main reads it again. The PR says `Closes #<n>` and `Requested by @<login>`, so GitHub tells the requester. The PR comes from your account, because the leads run on your computer.
 7. Main checks the PR as usual. Then the workflow `shop-merge.yml` merges it and closes the issue, so the PR shows `github-actions[bot]` as the account that merged it, not you. GitHub does not close the issue of a PR that a bot merges, so the workflow does it. `shop.sh ci install` adds the workflow, and only your account can run it. To find who asked for a change later, follow the commit to its PR, `Closes #<n>`, and the author of that issue.
-8. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead.
+8. To cancel, the requester closes the issue as not planned. The guard tells main, and main closes the PR and the lead. When another collaborator closes the issue, main does not cancel the order: it asks you.
 
 The issue is the full record of an order: every fact in the brief of a lead is also in the issue. This version handles text only: logs, code, and config go into the issue as text.
 

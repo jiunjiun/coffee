@@ -159,10 +159,11 @@ gate() {  # slug, issue number or empty
     die "issue #$2 changed after you read it. Read it again with shop.sh issue $2 and review it again."
 }
 
-# Shared mode: prints each new order once, and each cancel of a started order. Uses main's login in $me.
+# Shared mode: prints each new order once, each cancel of a started order, and each close of a started order by an
+# account that cannot cancel it. Uses main's login in $me.
 # ponytail: reads the newest 100 open issues per poll. A repo that gets more between two polls needs paging.
 issue_events() {
-  local last=0 pid=- issues issue started slug n state ok=1 orders=
+  local last=0 pid=- issues issue started slug n state reason by author at ok=1 orders=
   [[ -n ${me:-} ]] || return 0
   mkdir -p "$scratch"
   # The newest issue that this main process has seen. A new main process, after a crash or a resume, gets each open
@@ -185,12 +186,25 @@ issue_events() {
     echo "${CLAUDE_PID:-} $(jq --argjson last "$last" '[.[].number, $last] | max' <<<"$issues")" >"$scratch/last-issue"
   fi
   # A requester cancels a started order by closing its issue. A merge closes it as completed: that one needs nothing.
+  # Each collaborator with the right to close issues can close the order of another requester. So a close counts only
+  # from its requester, main's account, or github-actions[bot] as completed, which shop-merge.yml does after it merges
+  # the PR. Other workflows also close issues as github-actions[bot], for example a stale bot. For a close by another
+  # account, main asks the user, once for each close.
   for slug in $(ls "$scratch/working" 2>/dev/null); do
     n=$(cat "$scratch/working/$slug")
-    state=$(gh issue view "$n" --json state,stateReason | jq -r '"\(.state) \(.stateReason // "")"')
-    [[ -z $state || $state == OPEN* ]] && continue
-    [[ $state == *COMPLETED ]] || echo "CANCELLED #$n: its issue is closed (${state#CLOSED }). Run shop.sh close --discard $prefix-$slug-lead: it also closes the PR."
-    rm -f "$scratch/working/$slug"
+    # gh issue view has no field for who closed the issue. GitHub did not answer: read it again at the next poll.
+    read -r state reason by author at < <(gh api "repos/{owner}/{repo}/issues/$n" \
+      --jq '"\(.state) \(.state_reason // "-") \(.closed_by.login // "-") \(.user.login // "-") \(.closed_at // "-")"' 2>/dev/null)
+    [[ $state == closed ]] || continue
+    if [[ $by != "$author" && $by != "$me" && ! ($by == 'github-actions[bot]' && $reason == completed) ]]; then
+      [[ $(cat "$scratch/closed/$slug" 2>/dev/null) == "$at" ]] || {
+        mkdir -p "$scratch/closed" && echo "$at" >"$scratch/closed/$slug"
+        echo "CLOSED #$n by @$by, who is not its requester @$author. Do not close the lead: ask the user. To go on, open the issue again: gh issue reopen $n. To cancel the order, run shop.sh close --discard $prefix-$slug-lead."
+      }
+      continue
+    fi
+    [[ $reason == completed ]] || echo "CANCELLED #$n: its issue is closed ($reason). Run shop.sh close --discard $prefix-$slug-lead: it also closes the PR."
+    rm -f "$scratch/working/$slug" "$scratch/closed/$slug"
   done
 }
 
@@ -349,7 +363,7 @@ close_lead() {  # lead session name, discard
   for pr in $prs; do gh pr close "$pr" >/dev/null || die "cannot close PR #$pr."; done
   git worktree remove ${discard:+--force} "$wt" || die "cannot remove $wt."
   rmdir "$main_root/.scratch/$slug" 2>/dev/null
-  rm -f "$scratch/working/$slug" "$scratch/leads/$slug"
+  rm -f "$scratch/working/$slug" "$scratch/leads/$slug" "$scratch/closed/$slug"
   event close "$slug" "$1"
   # Delete the branch only when its work is on the default branch: a merged PR, or no commit of its own. Or when its
   # order is cancelled: GitHub keeps the commits of a closed PR.
@@ -624,8 +638,8 @@ cmd_stalled() {
 }
 
 # Run it with run_in_background. It ends when a session needs main, which wakes main. In solo mode, it also ends when
-# no session is left. In shared mode, it also ends on an order or a cancel from a requester, and it waits with no
-# session: orders come as GitHub issues.
+# no session is left. In shared mode, it also ends on an order or a cancel from a requester, or on a close of an order
+# by another account, and it waits with no session: orders come as GitHub issues.
 cmd_guard() {
   need main
   local pidfile out
