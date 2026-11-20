@@ -49,12 +49,12 @@ Do not use it when:
 
 ```
 you:  Add CSV export to the reports page. Also, dark mode breaks the chart colors.
-main: Order: CSV export (csv-export)
+main: Ticket: CSV export (csv-export)
       Background: Users copy the report by hand into a spreadsheet.
       Goal: A button on the reports page downloads the current report as CSV.
       Done when: The file opens in a spreadsheet with the same rows as the page.
 
-      Order: chart colors (chart-colors)
+      Ticket: chart colors (chart-colors)
       Background: In dark mode the chart lines have almost no contrast.
       Goal: Chart colors are readable in light and dark mode.
       Done when: The chart lines pass a contrast check in both modes.

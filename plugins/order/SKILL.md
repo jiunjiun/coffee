@@ -33,7 +33,7 @@ From now until the session ends, these rules apply to every message:
 ## The order
 
 ```
-Order: <name> (<slug>)
+Ticket: <name> (<slug>)
 Background: <why, in one or two sentences>
 Goal: <the result the user wants>
 Done when: <how to check that it is done>
