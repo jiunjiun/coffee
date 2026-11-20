@@ -9,7 +9,7 @@ Run once per project, in the project root.
 5. A lead commits and pushes with `/shop commit`. If the machine has another commit skill, for example `/commit`, ask the user which one the leads use. Set `commit_skill` only when the user picks another skill.
 6. Ask for the mode. `solo`, the default: only the user starts orders. `shared`: requesters on the team also send orders as GitHub issues with the `order` plugin, and main watches the issues. For `shared`:
    - Give the user the README section on who can send orders and how requesters install the plugin: https://github.com/jiunjiun/coffee#orders-from-your-team
-   - Check that `gh auth status` lists the `repo` and `read:org` scopes: the guard needs them to check collaborators. A push of the workflow file of step 10 also needs the `workflow` scope.
+   - Check that `gh auth status` lists the `repo` scope: the guard needs it to check collaborators. A push of the workflow file of step 10 also needs the `workflow` scope.
    - Tell the user: `github-actions[bot]` merges the PRs of requesters' orders. Such a merge does not start other workflows, for example a deploy on a push to the default branch.
    - Offer to add these rules to `permissions.deny` in `.claude/settings.json`, so that main merges only through `shop.sh merge`, which checks the branch and the issue: `Bash(gh pr merge:*)`, `Bash(gh workflow run:*)`, `Bash(gh api *merge*)`, `Bash(gh api *dispatches*)`. A rule matches only a command that a session runs, so `shop.sh` still merges. Tell the user that Claude sessions in this project then cannot merge a PR in any other way.
 7. Write `.claude/shop.json`. Keep only `prefix` and the values that differ from the defaults:
