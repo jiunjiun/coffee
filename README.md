@@ -81,7 +81,7 @@ Some projects have one staging database, one device, or one simulator. Main reco
 
 ### A session that needs you
 
-A background session can stop at a permission prompt. `shop.sh guard` runs in the background of main. It wakes main when a lead is blocked, or when a lead and its helpers are quiet for 30 minutes. Main tells you. The status page shows the command to open that session: `claude attach <id>`.
+A background session can stop at a permission prompt. `shop.sh guard` runs in the background of main. It wakes main when a lead is blocked, when a lead ended its turn and waits for a message, or when a lead and its helpers are quiet for 30 minutes. Main answers a lead that waits for a message. For a blocked lead, main tells you. The status page shows the command to open that session: `claude attach <id>`.
 
 ## How a feature moves
 
@@ -232,6 +232,18 @@ The `order` plugin works in the terminal and the desktop app. It does not work i
 | `max_helpers` | 2 | Helpers for each lead. |
 | `lead_skill` | `/poteto-mode` | The skill that each lead runs first. |
 | `commit_skill` | `"/shop commit"` | The skill that each lead commits and pushes with, for example your own `/commit`. |
+| `lead.model` | your settings | The model of each lead, for example `fable`. The shop gives it to `claude --model`. |
+| `lead.effort` | your settings | The effort of each lead, for example `xhigh`. The shop gives it to `claude --effort`. |
+| `helper.model` | your settings | The model of each helper. |
+| `helper.effort` | your settings | The effort of each helper. |
+
+The `lead` and `helper` keys are optional, and each of their values is optional:
+
+```json
+{ "prefix": "ac-web", "lead": { "model": "fable", "effort": "xhigh" }, "helper": { "model": "opus", "effort": "high" } }
+```
+
+A session with no value takes the model and the effort from your Claude Code settings. Main is your own session, so the shop does not set its model or its effort. The shop does not check the values.
 
 The project's `CLAUDE.md` decides how to verify a change, which resources take one actor at a time, and which PRs the owner merges.
 
@@ -257,7 +269,7 @@ The sessions run these. You seldom need them.
 | --- | --- | --- |
 | `shop.sh order <slug> <name>` | main, order | Records an order. It has no number until its GitHub issue at go. |
 | `shop.sh submit <slug> <title>` | order | Creates the GitHub issue of an order, with the order mark, from the order text on stdin. It needs the requester's go for that order. |
-| `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet, unchanged since main read it. With `--issue`, it reads the brief from `.scratch/shop/brief-<n>.md`. |
+| `shop.sh lead [--issue <n>] <type> <slug> <goal> [brief]` | main | Creates the worktree and branch, and starts a lead. When the worktree of an earlier lead for this slug is still there and that lead is gone, it takes that worktree over. `type` is feat, fix, chore, docs, refactor, or test. It needs your go for that order, or with `--issue`, an open order from a collaborator with no lead yet, unchanged since main read it. With `--issue`, it reads the brief from `.scratch/shop/brief-<n>.md`. |
 | `shop.sh queue [--issue <n>] <slug> <goal>` | main | Keeps your go, or an order from a requester, for a feature that must wait. |
 | `shop.sh issue <n>` | main, lead | Shows an issue with only the comments of its author and of main's account. Main's read saves the order. A lead of a requester's order gets the text that main read. |
 | `shop.sh feedback <pr>` | main, lead | Shows the PR comments of main's account and of the Claude review app, and counts the comments of other accounts. |

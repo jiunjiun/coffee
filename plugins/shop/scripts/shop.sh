@@ -239,14 +239,17 @@ go_scope() {  # prompt
 own_slug() { local base=${name%-lead}; [[ $role == helper ]] && base=${base%-*}; base=${base#"$prefix"-}; [[ $role == main ]] || echo "$base"; }
 
 start() {  # session, directory, system prompt, first prompt, extra denied tools
-  local session=$1 dir=$2 prompt=$3 first=() out
+  local session=$1 dir=$2 prompt=$3 first=() out kind=helper model effort
   [[ -n $4 ]] && first=("$4")
+  [[ $session == *-lead ]] && kind=lead
+  # A lead or helper key that is not an object counts as not set. With no value, the session takes the user's settings.
+  { read -r model; read -r effort; } < <(jq -r --arg k "$kind" '.[$k] | objects | .model // "", .effort // ""' "$conf")
   shift 4
   # The first prompt counts as typed by the user, so a skill that only a user can start runs. It goes before the
   # flags: --disallowedTools takes every word after it. EnterWorktree asks for a permission, and no one answers in a
   # background session: the session starts in its worktree, so it needs none. No one answers AskUserQuestion either:
   # a session sends its question up. The git rules are the limits of the commit steps.
-  out=$(cd "$dir" && claude --bg ${first[@]+"${first[@]}"} -n "$session" --permission-mode auto --disallowedTools 'Bash(claude --bg:*)' 'Bash(gh workflow run:*)' EnterWorktree ExitWorktree AskUserQuestion \
+  out=$(cd "$dir" && claude --bg ${first[@]+"${first[@]}"} -n "$session" --permission-mode auto ${model:+--model "$model"} ${effort:+--effort "$effort"} --disallowedTools 'Bash(claude --bg:*)' 'Bash(gh workflow run:*)' EnterWorktree ExitWorktree AskUserQuestion \
     'Bash(git push *--force*)' 'Bash(git push -f*)' 'Bash(git push * -f*)' 'Bash(git push *--no-verify*)' 'Bash(git commit *--no-verify*)' \
     "$@" --append-system-prompt "$prompt" 2>&1 </dev/null)
   [[ $out == *backgrounded* ]] && return 0
@@ -271,7 +274,7 @@ default_branch() { git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null
 cmd_lead() {
   local issue= issue_json me sys
   [[ ${1:-} == --issue ]] && { issue=${2:-}; shift 2; }
-  local type=${1:-} slug=${2:-} goal=${3:-} brief=${4:-${3:-}} skill commit from
+  local type=${1:-} slug=${2:-} goal=${3:-} brief=${4:-${3:-}} skill commit from resumed=
   need main
   [[ $type =~ ^(feat|fix|chore|docs|refactor|test)$ ]] || die "type must be feat, fix, chore, docs, refactor, or test."
   check_slug "$slug"
@@ -289,7 +292,15 @@ cmd_lead() {
   ((running < max)) || die "$running of $max leads are running. Queue this feature."
   from=$(default_branch)
   git fetch -q origin "${from#origin/}" || die "git fetch failed."
-  git worktree add -q -b "$type/$slug" "$wt" "$from" || die "cannot create the worktree."
+  # A lead can end while its PR is still open: its worktree stays. The next lead for its slug goes on in that worktree.
+  if [[ -e $wt ]]; then
+    [[ -z $(names "^$session\$") ]] || die "$session is still in the session list. Send it a message, or stop it first."
+    [[ $(git -C "$wt" branch --show-current 2>/dev/null) == "$type/$slug" ]] || die "the worktree at $wt is not on the branch $type/$slug."
+    resumed=1
+    brief="This worktree has the work of an earlier lead. Go on from it. Do not start again from the default branch."$'\n\n'$brief
+  else
+    git worktree add -q -b "$type/$slug" "$wt" "$from" || die "cannot create the worktree."
+  fi
   # The pstack plugin gives /poteto-mode. Setup makes sure that it is on.
   skill=$(jq -r 'if has("lead_skill") then .lead_skill else "/poteto-mode" end' "$conf")
   commit=$(jq -r '.commit_skill // "/shop commit"' "$conf")
@@ -303,8 +314,8 @@ cmd_lead() {
     "${skill:+$skill }Brief from $prefix-main:
 
 $brief" 'Bash(gh pr merge:*)'; then
-    git worktree remove "$wt"
-    git branch -qD "$type/$slug"
+    # A taken-over worktree has the work of the earlier lead.
+    [[ -n $resumed ]] || { git worktree remove "$wt"; git branch -qD "$type/$slug"; }
     die "cannot start $session."
   fi
   rm -f "$scratch/approved/$slug"
@@ -318,7 +329,9 @@ $brief" 'Bash(gh pr merge:*)'; then
     rm -f "$scratch/brief-$issue.md"
   fi
   event lead "$slug" "$goal"
-  echo "session=$session worktree=$wt branch=$type/$slug"
+  # stalled reads the last event of the lead: a ready of the earlier lead must not count for the new lead.
+  [[ -z $resumed ]] || name=$session event resume "$slug" "took over the worktree of an earlier lead"
+  echo "session=$session worktree=$wt branch=$type/$slug${resumed:+ resumed}"
 }
 
 cmd_helper() {
@@ -616,26 +629,29 @@ cmd_stalled() {
     [[ $kind == background ]] || continue
     since=$(last_active "$pid" "$id" "$dir")
     told=$scratch/told/$n
-    # A new helper is blocked with nothing in waitingFor until its brief comes.
-    [[ $state == blocked && $n != *-lead && $wait == - ]] && continue
+    # A session blocked with nothing in waitingFor ended its turn and waits for a message.
+    [[ $state == blocked && $wait == - ]] && state=ended
+    # A helper that ended its turn waits for its lead. A lead that ended its turn after ready waits for main, with its PR.
+    [[ $state == ended && ($n != *-lead || $(last_event "$n") == ready) ]] && continue
     if [[ $state != blocked ]]; then
-      [[ $n == *-lead && $(last_event "$n") != ready && -n $since ]] || continue
+      [[ $n == *-lead && $(last_event "$n") != ready && ($state == ended || -n $since) ]] || continue
       quiet=yes
       while IFS=$'\t' read -r m k s st p i d w; do
         [[ $m =~ ^${n%-lead}-[a-z0-9]+$ ]] || continue
         if [[ $s == busy ]] || grep -qF -- "$d" <<<"$dirs"; then quiet=; fi
         t=$(last_active "$p" "$i" "$d")
-        ((${t:-0} > since)) && since=$t
+        ((${t:-0} > ${since:-0})) && since=$t
       done <<<"$rows"
-      [[ -n $quiet ]] && ((now - since >= STALL_MIN * 60)) || continue
+      # A lead that ended its turn needs an answer now. A lead that works is a stall only after a long quiet time.
+      [[ -n $quiet ]] && { [[ $state == ended ]] || ((now - since >= STALL_MIN * 60)); } || continue
     fi
     [[ $(cat "$told" 2>/dev/null) != "${since:-none}" ]] || continue
     echo "${since:-none}" >"$told"
-    if [[ $state == blocked ]]; then
-      echo "BLOCKED $n: it waits for ${wait/#-/an answer}. No one in the background can answer."
-    else
-      echo "STALLED $n: quiet $(((now - since) / 60)) min, status $status, state $state, no command running."
-    fi
+    case $state in
+      ended) echo "WAITING $n: it ended its turn and waits for a message. Read its last message, then answer it or go on." ;;
+      blocked) echo "BLOCKED $n: it waits for $wait. No one in the background can answer." ;;
+      *) echo "STALLED $n: quiet $(((now - since) / 60)) min, status $status, state $state, no command running." ;;
+    esac
   done <<<"$rows"
 }
 

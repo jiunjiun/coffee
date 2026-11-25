@@ -87,7 +87,10 @@ def session(row):
     if not row:
         return {"state": "gone", "startedAt": None}
     started = row.get("startedAt")
-    return {"state": row.get("state") or row.get("status") or "unknown", "waitingFor": row.get("waitingFor") or "", "id": row.get("id") or "",
+    state, waiting = row.get("state") or row.get("status") or "unknown", row.get("waitingFor") or ""
+    if state in STUCK and not waiting:
+        state = "ended"  # the session ended its turn and waits for a message: main or its lead answers it
+    return {"state": state, "waitingFor": waiting, "id": row.get("id") or "",
             "startedAt": started / 1000 if started and started > 1e11 else started}
 
 
@@ -108,9 +111,10 @@ def attention(main, leads, orphans, sessions_ok, github_ok):
         act.append({"title": "No main session", "hint": "type /shop main in a session of this project"})
     for l in leads:
         for s, label in [(l, f"{l['slug']} lead")] + [(h, f"{l['slug']} helper {h['job']}") for h in l["helpers"]]:
-            if s["state"] in STUCK:
-                reason = s["waitingFor"] or "an answer"
-                act.append({"title": f"{label} is stuck: it waits for {reason}", "hint": f"claude attach {s['id']}"})
+            if s["state"] == "ended":
+                watch.append({"title": f"{label} ended its turn and waits for a message", "hint": "main answers it" if s is l else "its lead answers it"})
+            elif s["state"] in STUCK:
+                act.append({"title": f"{label} is stuck: it waits for {s['waitingFor']}", "hint": f"claude attach {s['id']}"})
         pr = l["pr"]
         if sessions_ok and l["state"] == "gone" and not (pr and pr["state"] == "MERGED"):
             act.append({"title": f"{l['slug']} lead is gone", "hint": "ask main to start it again, or run shop.sh close"})

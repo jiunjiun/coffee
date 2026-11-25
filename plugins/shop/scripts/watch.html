@@ -170,7 +170,7 @@ tbody tr.go-row:hover { background: var(--bg); }
 const $ = id => document.getElementById(id);
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 const SHOWN = 20;
-const WORDS = { busy: 'running', running: 'running', working: 'running', idle: 'idle', done: 'idle', waiting: 'stuck', blocked: 'stuck', gone: 'gone', unknown: 'unknown' };
+const WORDS = { busy: 'running', running: 'running', working: 'running', idle: 'idle', done: 'idle', waiting: 'stuck', blocked: 'stuck', ended: 'waits for a message', gone: 'gone', unknown: 'unknown' };
 const clock = t => new Date(t * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 const day = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
 const when = t => t ? `${day(t)} ${clock(t)}` : '';

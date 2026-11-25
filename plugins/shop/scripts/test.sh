@@ -286,6 +286,9 @@ want_json 'No main session' '.attention[0].title'
 want_json 'claude attach e65' '.attention[1].hint'
 want_json watch '.attention[2].level'
 want_json 'PR #7 has failed checks: 1' '.attention[2].title'
+agents_are '[{"name":"ac-web-dark-mode-lead","kind":"background","id":"e65","status":"idle","state":"blocked"}]'
+page=$(python3 -I "$(dirname "$shop")/watch.py" "$tmp/repo" --once)
+want_json 'watch main answers it' '.attention[] | select(.title == "dark-mode lead ended its turn and waits for a message") | "\(.level) \(.hint)"'
 url=$(run web | tail -1)
 want "http://localhost:" "web prints the address" "$url"
 want "$url" "web opens the page" "$(cat "$tmp/opened.log")"
@@ -364,12 +367,62 @@ run order other-skill g >/dev/null; typed 'go other-skill' >/dev/null; run lead 
 want "/other-skill Brief from ac-web-main:" "lead_skill replaces poteto-mode" "$(cat "$tmp/spawn.log")"
 [[ $(cat "$tmp/spawn.log") != */poteto-mode* ]] || { echo "FAIL lead_skill replaces poteto-mode"; failed=1; }
 
+# A lead can end while its PR is still open: its worktree stays. The next lead for its slug goes on in that worktree.
+for s in resume resume-start; do run order "$s" g >/dev/null; done; typed 'go resume resume-start' >/dev/null
+[[ $(run lead feat resume g) == "session=ac-web-resume-lead worktree=$PWD/.scratch/resume/wt branch=feat/resume" ]] ||
+  { echo "FAIL a lead with no worktree starts as before"; failed=1; }
+[[ $(cat "$tmp/spawn.log") != *"earlier lead"* ]] || { echo "FAIL a new worktree has no work of an earlier lead"; failed=1; }
+echo wip >.scratch/resume/wt/wip.txt
+run order resume g >/dev/null; typed 'go resume' >/dev/null
+agents_are '[{"name":"ac-web-resume-lead","kind":"background","status":"busy","state":"working"}]'
+want "ac-web-resume-lead is still in the session list" "a lead that runs is not started again" "$(run lead feat resume g)"
+agents_are '[]'
+want "is not on the branch fix/resume" "a lead does not take over a worktree on another branch" "$(run lead fix resume g)"
+want "branch=feat/resume resumed" "a lead takes over the worktree of an earlier lead" "$(run lead feat resume g brief)"
+want wip "a take-over keeps the work that is not committed" "$(cat .scratch/resume/wt/wip.txt)"
+want '"kind":"resume","who":"ac-web-resume-lead"' "a ready of the earlier lead does not count for the new lead" "$(tail -1 .scratch/shop/events.jsonl)"
+want "Brief from ac-web-main:
+
+This worktree has the work of an earlier lead. Go on from it. Do not start again from the default branch." "the brief tells the lead to go on from the worktree" "$(cat "$tmp/spawn.log")"
+run lead feat resume-start g >/dev/null
+run order resume-start g >/dev/null; typed 'go resume-start' >/dev/null
+touch "$tmp/untrusted"
+want "cannot start" "a failed take-over reports" "$(run lead feat resume-start g)"
+rm "$tmp/untrusted"
+[[ -n $(git branch --list feat/resume-start) && -e .scratch/resume-start/wt ]] || { echo "FAIL a failed take-over keeps the worktree and the branch"; failed=1; }
+
+# shop.json can set the model and the effort of the leads and of the helpers.
+model_lead() {  # slug: starts a lead with the shop.json of now
+  rm -f "$tmp/spawn.log"
+  run order "$1" g >/dev/null; typed "go $1" >/dev/null
+  run lead fix "$1" g brief
+}
+args() { cat "$tmp/spawn.log"; }  # one claude argument per line: the flags must come before the denied tools
+echo '{"prefix":"ac-web","lead":{"model":"fable","effort":"xhigh"}}' >.claude/shop.json
+want "session=ac-web-model-both-lead" "a lead starts with lead.model and lead.effort" "$(model_lead model-both)"
+want $'auto\n--model\nfable\n--effort\nxhigh\n--disallowedTools\n' "lead.model and lead.effort give --model and --effort" "$(args)"
+echo '{"prefix":"ac-web","lead":{"effort":"low"}}' >.claude/shop.json
+want "session=ac-web-model-effort-lead" "a lead starts with lead.effort only" "$(model_lead model-effort)"
+want $'auto\n--effort\nlow\n--disallowedTools\n' "lead.effort alone gives --effort and no --model" "$(args)"
+echo '{"prefix":"ac-web","lead":"fable","helper":{"model":"opus"}}' >.claude/shop.json
+out=$(model_lead model-helper)
+want "session=ac-web-model-helper-lead" "a lead key that is not an object counts as not set" "$out"
+[[ $out != *jq:* ]] || { echo "FAIL a lead key that is not an object gives no jq error: $out"; failed=1; }
+want $'auto\n--disallowedTools\n' "a lead does not get the model of the helpers" "$(args)"
+as ac-web-model-helper-lead; rm -f "$tmp/spawn.log"
+want "session=ac-web-model-helper-verify" "a helper starts with helper.model" "$(run helper verify)"
+want $'auto\n--model\nopus\n--disallowedTools\n' "helper.model alone gives --model and no --effort" "$(args)"
+as ac-web-main
+echo '{"prefix":"ac-web"}' >.claude/shop.json
+want "session=ac-web-model-none-lead" "a lead starts with no model keys" "$(model_lead model-none)"
+want $'auto\n--disallowedTools\n' "with no model keys, the arguments are as before" "$(args)"
+
 quiet_dir=$tmp/quiet
 mkdir -p "$quiet_dir"
 project=$tmp/.claude/projects/${quiet_dir//[^a-zA-Z0-9]/-}/s1/subagents
 mkdir -p "$project"
 idle_for() { echo "{\"status\":\"idle\",\"statusUpdatedAt\":$((($(date +%s) - $1) * 1000))}" >"$tmp/.claude/sessions/77.json"; }
-quiet_lead() { agents_are "[{\"name\":\"ac-web-q-lead\",\"kind\":\"background\",\"pid\":77,\"id\":\"s1\",\"sessionId\":\"s1\",\"cwd\":\"$quiet_dir\",\"status\":\"${1:-idle}\",\"state\":\"${2:-working}\",\"waitingFor\":\"permission prompt\"}]"; }
+quiet_lead() { agents_are "[{\"name\":\"ac-web-q-lead\",\"kind\":\"background\",\"pid\":77,\"id\":\"s1\",\"sessionId\":\"s1\",\"cwd\":\"$quiet_dir\",\"status\":\"${1:-idle}\",\"state\":\"${2:-working}\"${3-,\"waitingFor\":\"permission prompt\"}}]"; }  # a third argument that is empty: no waitingFor
 as ac-web-q-lead; want "needs a main session" "a lead has no guard" "$(run guard)"
 want "needs a main session" "a lead has no stalled" "$(run stalled)"
 as ac-web-main
@@ -412,8 +465,8 @@ want "STALLED ac-web-q-lead" "a ready lead working again counts" "$(run stalled)
 helper_dir=$tmp/quiet-helper
 mkdir -p "$helper_dir"
 helper_idle() { echo "{\"status\":\"idle\",\"statusUpdatedAt\":$((($(date +%s) - $1) * 1000))}" >"$tmp/.claude/sessions/78.json"; }
-with_helper() {  # helper status, helper state
-  agents_are "[{\"name\":\"ac-web-q-lead\",\"kind\":\"background\",\"pid\":77,\"sessionId\":\"s1\",\"cwd\":\"$quiet_dir\",\"status\":\"idle\",\"state\":\"working\"},{\"name\":\"ac-web-q-verify\",\"kind\":\"background\",\"pid\":78,\"sessionId\":\"s2\",\"cwd\":\"$helper_dir\",\"status\":\"$1\",\"state\":\"${2:-working}\",\"waitingFor\":\"permission prompt\"}]"
+with_helper() {  # helper status, helper state, lead state
+  agents_are "[{\"name\":\"ac-web-q-lead\",\"kind\":\"background\",\"pid\":77,\"sessionId\":\"s1\",\"cwd\":\"$quiet_dir\",\"status\":\"idle\",\"state\":\"${3:-working}\"},{\"name\":\"ac-web-q-verify\",\"kind\":\"background\",\"pid\":78,\"sessionId\":\"s2\",\"cwd\":\"$helper_dir\",\"status\":\"$1\",\"state\":\"${2:-working}\",\"waitingFor\":\"permission prompt\"}]"
 }
 idle_for 3000; helper_idle 3000; with_helper busy
 [[ -z $(run stalled) ]] || { echo "FAIL a lead that waits for a busy helper is no stall"; failed=1; }
@@ -430,6 +483,19 @@ agents_are "[{\"name\":\"ac-web-q-new\",\"kind\":\"background\",\"pid\":78,\"ses
 [[ -z $(run stalled) ]] || { echo "FAIL a new helper that waits for its brief is not blocked"; failed=1; }
 quiet_lead idle blocked; idle_for 10
 want "BLOCKED ac-web-q-lead: it waits for permission prompt" "blocked needs no wait" "$(run stalled)"
+quiet_lead idle blocked ''; idle_for 600
+want "WAITING ac-web-q-lead: it ended its turn" "a lead blocked with nothing in waitingFor waits for a message" "$(run stalled)"
+[[ -z $(run stalled) ]] || { echo "FAIL one report per wait"; failed=1; }
+echo '{"t":3,"kind":"ready","who":"ac-web-q-lead","slug":"q","text":"#7"}' >>.scratch/shop/events.jsonl
+idle_for 700
+[[ -z $(run stalled) ]] || { echo "FAIL a lead that reported its PR waits for main, and main knows it"; failed=1; }
+quiet_lead idle blocked
+want "BLOCKED ac-web-q-lead: it waits for permission prompt" "a ready lead at a permission prompt is blocked" "$(run stalled)"
+echo '{"t":4,"kind":"note","who":"ac-web-q-lead","slug":"q","text":"branch updated"}' >>.scratch/shop/events.jsonl
+quiet_lead idle blocked ''; idle_for 800
+want "WAITING ac-web-q-lead" "a ready lead that works again waits for a message" "$(run stalled)"
+idle_for 900; helper_idle 5; with_helper busy working blocked
+[[ -z $(run stalled) ]] || { echo "FAIL a lead that ended its turn and waits for a busy helper needs no answer"; failed=1; }
 quiet_lead; idle_for 2900
 out=$(GUARD_POLL=0.05 run guard)
 want "STALLED ac-web-q-lead" "guard ends on a stall" "$out"
