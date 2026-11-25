@@ -54,7 +54,7 @@ User's words: <the key words of the user, quoted>
 1. Look for the same request: `gh issue list --state all --search "<key words>"` and `gh pr list --state all --search "<key words>"`. Show the user each close match, and suggest a comment on the old issue instead of a new order.
 2. Check that the order can be built: read the related code. Name each thing that only a person can give, for example a key, an account, or access to a system.
 3. Check the account: `gh auth status`. The issue goes out under this account, and the shop accepts orders only from the collaborators of the repository.
-4. Record each order with `T order <slug> "<name>"`, then show the full order. After the last order, add one line: `Reply go to submit. To submit only some, name them: go <slug>. To change something, say it.` When you change an order, record it again: it needs a new go.
+4. Record each order with `T order <slug> "<name>"`, then show the full order. After the last order, add one line in the user's language. It says: reply go to submit; to submit only some, name them, for example `go <slug>`; to change something, say it. Keep the word `go` as it is: the hook reads only that word. When you change an order, record it again: it needs a new go.
 
 ## Submit
 
