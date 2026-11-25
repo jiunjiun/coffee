@@ -619,7 +619,7 @@ cmd_status() {
 # helper is not stuck. So only a lead counts as stalled, and only when the lead and its helpers are all quiet.
 cmd_stalled() {
   need main
-  local dirs now rows n kind status state pid id dir wait since told m k s st p i d w t quiet
+  local dirs now rows n kind status state pid id dir wait since told m k s st p i d w t quiet ev
   rows=$(shop_rows)
   [[ -n $rows ]] || return 0
   dirs=$(command_dirs)
@@ -629,12 +629,17 @@ cmd_stalled() {
     [[ $kind == background ]] || continue
     since=$(last_active "$pid" "$id" "$dir")
     told=$scratch/told/$n
-    # A session blocked with nothing in waitingFor ended its turn and waits for a message.
-    [[ $state == blocked && $wait == - ]] && state=ended
+    # A session that ended its turn waits for a message: Claude Code says done, or blocked with nothing in waitingFor.
+    # A busy session can still show the state of its last turn: it works.
+    if [[ $state == done || ($state == blocked && $wait == -) ]]; then
+      [[ $status == busy ]] && state=working || state=ended
+    fi
     # A helper that ended its turn waits for its lead. A lead that ended its turn after ready waits for main, with its PR.
-    [[ $state == ended && ($n != *-lead || $(last_event "$n") == ready) ]] && continue
+    ev=
+    [[ $n == *-lead ]] && ev=$(last_event "$n")
+    [[ $state == ended && ($n != *-lead || $ev == ready) ]] && continue
     if [[ $state != blocked ]]; then
-      [[ $n == *-lead && $(last_event "$n") != ready && ($state == ended || -n $since) ]] || continue
+      [[ $n == *-lead && $ev != ready && ($state == ended || -n $since) ]] || continue
       quiet=yes
       while IFS=$'\t' read -r m k s st p i d w; do
         [[ $m =~ ^${n%-lead}-[a-z0-9]+$ ]] || continue

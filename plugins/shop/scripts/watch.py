@@ -88,8 +88,10 @@ def session(row):
         return {"state": "gone", "startedAt": None}
     started = row.get("startedAt")
     state, waiting = row.get("state") or row.get("status") or "unknown", row.get("waitingFor") or ""
-    if state in STUCK and not waiting:
-        state = "ended"  # the session ended its turn and waits for a message: main or its lead answers it
+    if state == "done" or state in STUCK and not waiting:
+        # ended: the session ended its turn and waits for a message, and main or its lead answers it.
+        # A busy session can still show the state of its last turn: it works.
+        state = "busy" if row.get("status") == "busy" else "ended"
     return {"state": state, "waitingFor": waiting, "id": row.get("id") or "",
             "startedAt": started / 1000 if started and started > 1e11 else started}
 

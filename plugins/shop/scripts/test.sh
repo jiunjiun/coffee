@@ -289,6 +289,12 @@ want_json 'PR #7 has failed checks: 1' '.attention[2].title'
 agents_are '[{"name":"ac-web-dark-mode-lead","kind":"background","id":"e65","status":"idle","state":"blocked"}]'
 page=$(python3 -I "$(dirname "$shop")/watch.py" "$tmp/repo" --once)
 want_json 'watch main answers it' '.attention[] | select(.title == "dark-mode lead ended its turn and waits for a message") | "\(.level) \(.hint)"'
+agents_are '[{"name":"ac-web-dark-mode-lead","kind":"background","id":"e65","status":"idle","state":"done"}]'
+page=$(python3 -I "$(dirname "$shop")/watch.py" "$tmp/repo" --once)
+want_json ended '.leads[0].state'
+agents_are '[{"name":"ac-web-dark-mode-lead","kind":"background","id":"e65","status":"busy","state":"blocked"}]'
+page=$(python3 -I "$(dirname "$shop")/watch.py" "$tmp/repo" --once)
+want_json busy '.leads[0].state'
 url=$(run web | tail -1)
 want "http://localhost:" "web prints the address" "$url"
 want "$url" "web opens the page" "$(cat "$tmp/opened.log")"
@@ -486,6 +492,12 @@ want "BLOCKED ac-web-q-lead: it waits for permission prompt" "blocked needs no w
 quiet_lead idle blocked ''; idle_for 600
 want "WAITING ac-web-q-lead: it ended its turn" "a lead blocked with nothing in waitingFor waits for a message" "$(run stalled)"
 [[ -z $(run stalled) ]] || { echo "FAIL one report per wait"; failed=1; }
+quiet_lead idle done ''; idle_for 650
+want "WAITING ac-web-q-lead: it ended its turn" "a lead that Claude Code calls done waits for a message" "$(run stalled)"
+quiet_lead busy done ''; idle_for 660
+[[ -z $(run stalled) ]] || { echo "FAIL a busy lead with the state of its last turn needs no answer"; failed=1; }
+quiet_lead busy blocked ''; idle_for 670
+[[ -z $(run stalled) ]] || { echo "FAIL a busy lead blocked with nothing in waitingFor is not blocked"; failed=1; }
 echo '{"t":3,"kind":"ready","who":"ac-web-q-lead","slug":"q","text":"#7"}' >>.scratch/shop/events.jsonl
 idle_for 700
 [[ -z $(run stalled) ]] || { echo "FAIL a lead that reported its PR waits for main, and main knows it"; failed=1; }
